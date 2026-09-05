@@ -1,0 +1,31 @@
+{
+	"schemaVersion": 1,
+	"id": "cookie-client",
+	"version": "beta1.0",
+	"name": "Cookie Client",
+	"description": "A Fabric PVP client for Minecraft 1.20.1, written in Java.",
+	"authors": [
+		"xxliam"
+	],
+	"contact": {
+		"homepage": "https://github.com/xxliam",
+		"sources": "https://github.com/xxliam/cookie-client"
+	},
+	"license": "CC0-1.0",
+	"icon": "assets/cookie-client/icon.png",
+	"environment": "*",
+	"entrypoints": {
+		"main": [
+			"xxliam.cookieclient.CookieClient"
+		]
+	},
+	"mixins": [
+		"cookie-client.mixins.json"
+	],
+	"depends": {
+		"fabricloader": ">=0.19.3",
+		"minecraft": "~1.20.1",
+		"java": ">=17",
+		"fabric-api": "*"
+	}
+}
