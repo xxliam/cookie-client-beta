@@ -67,6 +67,17 @@ public abstract class Module {
         this.visible = visible;
     }
 
+    /**
+     * 该模块的开关状态是否写入 modules.json 持久化并在启动时恢复。
+     * <p>
+     * 默认 true。GUI 类模块（如 ClickGui）的 enabled 只在界面打开期间有意义，
+     * 一旦随配置保存并在下次启动时恢复，会触发 setScreen 弹窗甚至启动期崩溃，
+     * 应返回 false 完全排除出持久化。
+     */
+    public boolean shouldPersistEnabled() {
+        return true;
+    }
+
     /** 模块列表右侧附加的实时状态后缀（如开火速率），无则 null。 */
     public String getSuffix() {
         return null;

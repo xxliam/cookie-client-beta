@@ -18,7 +18,7 @@ import xxliam.cookieclient.CookieClient;
 @Mixin(MouseHandler.class)
 public class MouseHandlerMixin {
 
-    @Inject(method = "onPress", at = @At("HEAD"))
+    @Inject(method = "onPress", at = @At("HEAD"), cancellable = true)
     private void cookieclient$onPress(long window, int button, int action, int mods, CallbackInfo ci) {
         Minecraft mc = Minecraft.getInstance();
         if (mc == null || window != mc.getWindow().getWindow()) {
@@ -37,6 +37,11 @@ public class MouseHandlerMixin {
         }
         if (CookieClient.MODULE_MANAGER != null) {
             CookieClient.MODULE_MANAGER.onKeyPress(button);
+        }
+        // 本次侧键打开了 ClickGUI（绑到侧键时）：与 KeyboardMixin 同理，vanilla 会在同一个
+        // onPress 调用里把这次点击二次派发给刚设置的 Screen（可能误触面板行 / 拖拽），吞掉。
+        if (mc.screen != null) {
+            ci.cancel();
         }
     }
 }

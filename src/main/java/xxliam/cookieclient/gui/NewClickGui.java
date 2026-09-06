@@ -9,6 +9,7 @@ import xxliam.cookieclient.CookieClient;
 import xxliam.cookieclient.gui.newclickgui.BindElement;
 import xxliam.cookieclient.gui.newclickgui.CategoryPanel;
 import xxliam.cookieclient.modules.Category;
+import xxliam.cookieclient.modules.impl.render.ClickGui;
 import xxliam.cookieclient.modules.impl.render.hud.ModuleList;
 import xxliam.cookieclient.render.CustomFont;
 import xxliam.cookieclient.render.FontStore;
@@ -97,6 +98,7 @@ public class NewClickGui extends Screen {
             for (CategoryPanel panel : CATEGORY_PANELS) {
                 panel.reset();
             }
+            ClickGui.onGuiClosed(); // 复位 ClickGui 模块（enabled 仅 GUI 打开期间为 true）
             CookieClient.CONFIG_MANAGER.save(); // 持久化本次 GUI 会话中的开关/设置/绑定
             return;
         }
@@ -134,6 +136,12 @@ public class NewClickGui extends Screen {
         BindElement listening = BindElement.getListening();
         if (listening != null) {
             return listening.onKey(keyCode);
+        }
+        // GUI 内按 ClickGui 模块当前绑定的键 = 关闭（与游戏内打开对称；默认右 Shift）
+        int guiKey = ClickGui.INSTANCE != null ? ClickGui.INSTANCE.getKeyBind() : 344;
+        if (keyCode == guiKey) {
+            onClose();
+            return true;
         }
         return super.keyPressed(keyCode, scanCode, modifiers);
     }

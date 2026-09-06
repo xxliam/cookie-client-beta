@@ -16,6 +16,7 @@ import xxliam.cookieclient.modules.impl.movement.Sprint;
 import xxliam.cookieclient.modules.impl.player.NoFall;
 import xxliam.cookieclient.modules.impl.render.Animations;
 import xxliam.cookieclient.modules.impl.render.AspectRatio;
+import xxliam.cookieclient.modules.impl.render.ClickGui;
 import xxliam.cookieclient.modules.impl.render.ESP;
 import xxliam.cookieclient.modules.impl.render.FullBright;
 import xxliam.cookieclient.modules.impl.render.NameProtect;
@@ -60,6 +61,7 @@ public class ModuleManager {
         add(new NameProtect());
         add(new Animations());
         add(new AutoTools());
+        add(new ClickGui());
     }
 
     public void add(Module module) {

@@ -37,6 +37,17 @@ public final class FontStore {
     public static final CustomFont PRODUCTSANS_MEDIUM_6_5 = loadFont(13.0f, "productsans-medium.ttf");
     public static final CustomFont PRODUCTSANS_MEDIUM_7_5 = loadFont(15.0f, "productsans-medium.ttf");
 
+    // ---- Opal DropdownClickGUI 字号（照搬 opal FontRepository 同名族字号：
+    // productsans-medium/bold 视觉 5.5/6/7/8/9 + materialicons-regular 视觉 6/9/10/12） ----
+    public static final CustomFont PRODUCTSANS_MEDIUM_5_5 = loadFont(11.0f, "productsans-medium.ttf");
+    public static final CustomFont PRODUCTSANS_MEDIUM_6 = loadFont(12.0f, "productsans-medium.ttf");
+    public static final CustomFont PRODUCTSANS_MEDIUM_7 = loadFont(14.0f, "productsans-medium.ttf");
+    public static final CustomFont PRODUCTSANS_BOLD_9 = loadFont(18.0f, "productsans-bold.ttf");
+    public static final CustomFont MATERIALICONS_6 = loadFont(12.0f, "materialicons-regular.ttf");
+    public static final CustomFont MATERIALICONS_9 = loadFont(18.0f, "materialicons-regular.ttf");
+    public static final CustomFont MATERIALICONS_10 = loadFont(20.0f, "materialicons-regular.ttf");
+    public static final CustomFont MATERIALICONS_12 = loadFont(24.0f, "materialicons-regular.ttf");
+
     private FontStore() {
     }
 

@@ -31,6 +31,8 @@ public class CategoryPanel extends UIElement {
     public static final int BG_COLOR = ColorUtil.fromRGB(23, 23, 23);
     public static final int ACCENT_COLOR_DARK = new Color(-13768502).darker().darker().getRGB();
     public static final int ACCENT_COLOR = new Color(-13768502).darker().getRGB();
+    /** 底部模块展开时，黑色背景在内容底边之外额外向下延长的量（逻辑像素）。 */
+    private static final float BOTTOM_PAD = 5.0f;
 
     private final List<ModuleElement> moduleElements = new ArrayList<>();
     private final Category category;
@@ -53,6 +55,8 @@ public class CategoryPanel extends UIElement {
     private final SmoothAnimationTimer scrollTimer = new SmoothAnimationTimer();
     private final SmoothAnimationTimer tooltipTimer = new SmoothAnimationTimer();
     private final SmoothAnimationTimer collapseTimer = new SmoothAnimationTimer();
+    /** 底部展开余量动画：有模块展开时黑色背景底边平滑多长出的一小截（见 {@link #BOTTOM_PAD}）。 */
+    private final SmoothAnimationTimer bottomPadTimer = new SmoothAnimationTimer();
 
     public CategoryPanel(Category category) {
         this.category = category;
@@ -62,9 +66,9 @@ public class CategoryPanel extends UIElement {
         panelHeight = 20.0f + Math.min(240.0f, 20.0f * moduleElements.size());
     }
 
-    /** 面板内容区可用最大高度：扩展到屏幕底部留白（下限 240 兼容小 GUI 缩放，上限随窗口高度）。 */
+    /** 面板内容区可用最大高度：扩展到屏幕底部留白（下限 350 兼容小 GUI 缩放，上限随窗口高度）。 */
     private float maxContentHeight() {
-        return Math.max(240.0f, Minecraft.getInstance().getWindow().getGuiScaledHeight() - 76.0f);
+        return Math.max(350.0f, Minecraft.getInstance().getWindow().getGuiScaledHeight() - 76.0f);
     }
 
     @Override
@@ -78,11 +82,17 @@ public class CategoryPanel extends UIElement {
         scaleTimer.animate(invisible ? 0.0 : 1.0, invisible ? 0.22 : 0.32, Easings.BACK_OUT);
         scaleTimer.tick();
         float totalContentHeight = 0.0f;
+        boolean anyExpanded = false;
         for (ModuleElement moduleElement : moduleElements) {
             totalContentHeight += moduleElement.getHeight();
+            anyExpanded |= moduleElement.isExpanded();
         }
+        // 底部余量：有模块展开（尤其触底的那个）时背景底边再多留出一小截，避免展开区灰底顶满
+        // 黑色圆角边缘。pad 走独立动画，展开瞬间不会跳变；全部收起后平滑收回。
+        bottomPadTimer.animate(anyExpanded ? BOTTOM_PAD : 0.0f, 0.2, Easings.EASE_OUT_POW2);
+        bottomPadTimer.tick();
         // 面板随内容增长到屏幕可用高度：原上限 240（模块>=10 时固定 260 不增长）在新增 HUD 模块后不够用。
-        panelHeight = Math.min(totalContentHeight, maxContentHeight()) + 20.0f;
+        panelHeight = Math.min(totalContentHeight, maxContentHeight()) + 20.0f + bottomPadTimer.getValueF();
         scrollAmount = Mth.clamp(scrollAmount, 0.0f, totalContentHeight - panelHeight + 20.0f);
         scrollTimer.animate(scrollAmount, 0.22, Easings.EASE_OUT_POW2);
         scrollTimer.tick();

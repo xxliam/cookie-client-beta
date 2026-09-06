@@ -19,6 +19,7 @@ import org.lwjgl.opengl.GL20;
 import org.lwjgl.opengl.GL30;
 import xxliam.cookieclient.render.shader.ShaderFormats;
 import xxliam.cookieclient.render.shader.ShaderProgram;
+import xxliam.cookieclient.utils.render.ColorUtil;
 
 import java.awt.Color;
 import java.awt.Graphics2D;
@@ -416,6 +417,117 @@ public final class Renderer {
             prevX = x;
             prevY = y;
         }
+    }
+
+    // ---------------------------------------------------------------------
+    // 渐变圆角（复刻 OpenOpal NVGRenderer.roundedRectGradient / rectGradient /
+    // roundedRectVaryingGradient 的 nvgLinearGradient 端点数学，照搬 opal 原版）
+    //
+    // opal 端点公式：angle 转单位向量 (dx,dy)，start = 中心 - (dx,dy)*width/2，
+    // 线段长 = width；t = 点投影 / width，clamp 0..1 后在 color1→color2 间线性插值。
+    // 用「每顶点着色 + 三角形插值」精确复现线性渐变（矩形凸多边形上插值等于线性函数）。
+    // ---------------------------------------------------------------------
+
+    /** 统一圆角半径的渐变圆角矩形。angleDegrees 与 opal 一致：0=水平(左→右)，90=垂直(上→下)。 */
+    public static void drawRoundedRectGradient(PoseStack poseStack, float x, float y, float width, float height,
+                                               float radius, int color1, int color2, float angleDegrees) {
+        drawRoundedRectGradient(poseStack, x, y, width, height,
+                radius, radius, radius, radius, color1, color2, angleDegrees);
+    }
+
+    /** 四角独立半径的渐变圆角矩形（语义同 {@link #drawRoundedRectTessellator} 的多半径版）。 */
+    public static void drawRoundedRectGradient(PoseStack poseStack, float x, float y, float width, float height,
+                                               float tl, float tr, float br, float bl,
+                                               int color1, int color2, float angleDegrees) {
+        if (width <= 0.0f || height <= 0.0f) {
+            return;
+        }
+        float maxRadius = Math.min(width, height) / 2.0f;
+        tl = clampRadius(tl, maxRadius);
+        tr = clampRadius(tr, maxRadius);
+        br = clampRadius(br, maxRadius);
+        bl = clampRadius(bl, maxRadius);
+
+        Matrix4f matrix = poseStack.last().pose();
+        RenderSystem.enableBlend();
+        RenderSystem.defaultBlendFunc();
+        RenderSystem.disableCull();
+        RenderSystem.setShader(GameRenderer::getPositionColorShader);
+
+        // opal nvgLinearGradient 端点
+        float angleRad = (float) Math.toRadians(angleDegrees);
+        float gdx = (float) Math.cos(angleRad);
+        float gdy = (float) Math.sin(angleRad);
+        float gsx = x + width * 0.5f - gdx * width * 0.5f; // NVG x0
+        float gsy = y + height * 0.5f - gdy * width * 0.5f; // NVG y0（长度轴为 width）
+        float gLen = width;
+
+        GradientColorAt cAt = (px, py) -> {
+            float t = (((px - gsx) * gdx) + ((py - gsy) * gdy)) / gLen;
+            t = Math.max(0.0f, Math.min(1.0f, t));
+            return ColorUtil.interpolateColors(color1, color2, t);
+        };
+
+        BufferBuilder buffer = Tesselator.getInstance().getBuilder();
+
+        // 1) 中心 + 四条边（直角矩形）
+        buffer.begin(VertexFormat.Mode.QUADS, DefaultVertexFormat.POSITION_COLOR);
+        emitRectGradient(buffer, matrix, x + tl, y + tl, width - tl - tr, height - tl - bl, cAt);      // 中心
+        emitRectGradient(buffer, matrix, x + tl, y, width - tl - tr, tl, cAt);                          // 上边
+        emitRectGradient(buffer, matrix, x + bl, y + height - bl, width - bl - br, bl, cAt);            // 下边
+        emitRectGradient(buffer, matrix, x, y + tl, tl, height - tl - bl, cAt);                          // 左边
+        emitRectGradient(buffer, matrix, x + width - tr, y + tr, tr, height - tr - br, cAt);            // 右边
+        BufferUploader.drawWithShader(buffer.end());
+
+        // 2) 四个角（三角扇逼近圆弧，作为三角形提交）
+        buffer.begin(VertexFormat.Mode.TRIANGLES, DefaultVertexFormat.POSITION_COLOR);
+        emitCornerGradient(buffer, matrix, x + tl, y + tl, tl, 180f, 270f, cAt);                        // 左上
+        emitCornerGradient(buffer, matrix, x + width - tr, y + tr, tr, 270f, 360f, cAt);                // 右上
+        emitCornerGradient(buffer, matrix, x + width - br, y + height - br, br, 0f, 90f, cAt);          // 右下
+        emitCornerGradient(buffer, matrix, x + bl, y + height - bl, bl, 90f, 180f, cAt);                // 左下
+        BufferUploader.drawWithShader(buffer.end());
+
+        RenderSystem.disableBlend();
+    }
+
+    /** 向当前 QUADS buffer 提交一个矩形，四顶点各自着色。 */
+    private static void emitRectGradient(BufferBuilder buffer, Matrix4f matrix,
+                                         float x, float y, float width, float height,
+                                         GradientColorAt cAt) {
+        buffer.vertex(matrix, x, y, 0.0f).color(cAt.get(x, y)).endVertex();
+        buffer.vertex(matrix, x, y + height, 0.0f).color(cAt.get(x, y + height)).endVertex();
+        buffer.vertex(matrix, x + width, y + height, 0.0f).color(cAt.get(x + width, y + height)).endVertex();
+        buffer.vertex(matrix, x + width, y, 0.0f).color(cAt.get(x + width, y)).endVertex();
+    }
+
+    /** 向当前 TRIANGLES buffer 提交一个渐变着色的角弧（90° 扇形）。 */
+    private static void emitCornerGradient(BufferBuilder buffer, Matrix4f matrix,
+                                           float cx, float cy, float radius,
+                                           float startAngle, float endAngle,
+                                           GradientColorAt cAt) {
+        if (radius <= 0.0f) {
+            return;
+        }
+        int segments = Math.max(6, (int) (radius * 2.0f));
+        float prevAngle = (float) Math.toRadians(startAngle);
+        float prevX = cx + (float) Math.cos(prevAngle) * radius;
+        float prevY = cy + (float) Math.sin(prevAngle) * radius;
+        for (int i = 1; i <= segments; i++) {
+            float angle = (float) Math.toRadians(startAngle + (endAngle - startAngle) * i / segments);
+            float x = cx + (float) Math.cos(angle) * radius;
+            float y = cy + (float) Math.sin(angle) * radius;
+            buffer.vertex(matrix, cx, cy, 0.0f).color(cAt.get(cx, cy)).endVertex();
+            buffer.vertex(matrix, prevX, prevY, 0.0f).color(cAt.get(prevX, prevY)).endVertex();
+            buffer.vertex(matrix, x, y, 0.0f).color(cAt.get(x, y)).endVertex();
+            prevX = x;
+            prevY = y;
+        }
+    }
+
+    /** 渐变顶点取色函数。 */
+    @FunctionalInterface
+    private interface GradientColorAt {
+        int get(float x, float y);
     }
 
     // ---------------------------------------------------------------------

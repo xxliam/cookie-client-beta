@@ -36,6 +36,9 @@ public class ModulesConfig extends Config {
                 return;
             }
             for (Module module : modules) {
+                if (!module.shouldPersistEnabled()) {
+                    continue; // GUI 类等瞬时模块不随配置恢复
+                }
                 Boolean enabled = states.get(module.getName());
                 if (enabled != null && enabled) {
                     module.enable();
@@ -49,6 +52,9 @@ public class ModulesConfig extends Config {
     public void save(List<Module> modules) {
         Map<String, Boolean> states = new HashMap<>();
         for (Module module : modules) {
+            if (!module.shouldPersistEnabled()) {
+                continue; // 同上：不把瞬时开关状态写死进配置
+            }
             states.put(module.getName(), module.isEnabled());
         }
         try {

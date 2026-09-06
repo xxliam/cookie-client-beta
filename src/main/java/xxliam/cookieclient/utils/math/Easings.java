@@ -6,6 +6,9 @@ package xxliam.cookieclient.utils.math;
 public final class Easings {
 
     public static final Easing BACK_OUT = t -> 1.0 + 2.70158 * Math.pow(t - 1.0, 3.0) + 1.70158 * Math.pow(t - 1.0, 2.0);
+    /** 线性（复刻 OpenOpal {@code Easing.LINEAR}，Opal 数值滑杆拖动动画用它）。 */
+    public static final Easing LINEAR = t -> t;
+    /** Opal {@code Easing.DECELERATE}（1-(x-1)^2）在 cookie 侧即 EASE_OUT_QUAD，见下方。 */
     public static final Easing EASE_OUT_QUAD = t -> 1.0 - (t - 1.0) * (t - 1.0);
     /** 复刻 OpenOpal 的 {@code Easing.EASE_OUT_EXPO}（x == 1 ? 1 : 1 - 2^(-10x)）。 */
     public static final Easing EASE_OUT_EXPO = t -> t == 1.0 ? 1.0 : 1.0 - Math.pow(2.0, -10.0 * t);
