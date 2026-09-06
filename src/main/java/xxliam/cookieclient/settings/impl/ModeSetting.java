@@ -42,6 +42,14 @@ public class ModeSetting extends Setting<String> {
 
     @Override
     public void load(JsonElement jsonElement) {
-        setValue(jsonElement.getAsString());
+        String value = jsonElement.getAsString();
+        for (String mode : modes) {
+            if (mode.equalsIgnoreCase(value)) {
+                setValue(mode); // 以规范大小写落盘
+                return;
+            }
+        }
+        // 配置中残留的档位已被删除（或非法值）：回落第一个档位，避免模块静默失效
+        setValue(modes.length > 0 ? modes[0] : null);
     }
 }

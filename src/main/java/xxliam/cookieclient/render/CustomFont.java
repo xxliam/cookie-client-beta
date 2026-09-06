@@ -79,6 +79,7 @@ public class CustomFont implements Closeable {
     }
 
     private final Object2ObjectMap<Character, GlyphVisualBounds> glyphVisualCache = new Object2ObjectOpenHashMap<>();
+    private final Object2ObjectMap<Character, GlyphVisualBounds> glyphRenderedCache = new Object2ObjectOpenHashMap<>();
     private final Object2ObjectMap<ResourceLocation, ObjectList<GlyphEntry>> glyphPageMap = new Object2ObjectOpenHashMap<>();
     private final float fontSize;
     private final ObjectList<GlyphPage> glyphPages = new ObjectArrayList<>();
@@ -469,6 +470,55 @@ public class CustomFont implements Closeable {
         } finally {
             graphics.dispose();
         }
+    }
+
+    /**
+     * 取某字符在已栅格化图谱中的真实墨迹边界（逻辑像素，相对笔位）。带缓存。
+     * <p>
+     * 与 {@link #getGlyphVisualBounds(char)} 的区别：本方法扫描 {@link GlyphPage} 实际绘制到
+     * 图谱的像素，而非 AWT {@code GlyphVector} 的几何 bounds——quad 上屏后经 bilinear 下采样
+     * 呈现给玩家的最终位置以图谱为准，因此用于「以中心点居中」的绘制（如图标 / 单字符徽标）
+     * 时不会出现 1~2 像素的几何↔像素漂移。命中失败（字符未栅格化 / 空白）时回落到
+     * {@link #getGlyphVisualBounds(char)} 的几何结果，保证可用。
+     */
+    public GlyphVisualBounds getGlyphRenderedBounds(char c) {
+        synchronized (glyphRenderedCache) {
+            GlyphVisualBounds cached = glyphRenderedCache.get(c);
+            if (cached != null) {
+                return cached;
+            }
+        }
+        GlyphVisualBounds measured = measureGlyphRenderedBounds(c);
+        synchronized (glyphRenderedCache) {
+            GlyphVisualBounds existing = glyphRenderedCache.get(c);
+            if (existing != null) {
+                return existing;
+            }
+            glyphRenderedCache.put(c, measured);
+        }
+        return measured;
+    }
+
+    private GlyphVisualBounds measureGlyphRenderedBounds(char c) {
+        Glyph glyph = getOrLoadGlyph(c);
+        if (glyph != null) {
+            BufferedImage atlas = glyph.owner().getAtlasImage();
+            if (atlas != null) {
+                int[] ink = glyph.owner().scanGlyphInkBounds(glyph.u(), glyph.v(), glyph.width(), glyph.height());
+                if (ink != null) {
+                    float k = 1.0f / scale;
+                    // 笔位在 quad 内的位置：x = quad.u；y = quad.v + ascent
+                    int ascent = fontMetrics.getAscent();
+                    return new GlyphVisualBounds(
+                            ink[0] * k,
+                            (ink[1] - ascent) * k,
+                            ink[2] * k,
+                            ink[3] * k);
+                }
+            }
+        }
+        // 兜底：未栅格化或空白字符，回落到 AWT 几何 bounds
+        return measureGlyphVisualBounds(c);
     }
 
     public float getStringWidth(String text) {

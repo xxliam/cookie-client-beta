@@ -19,6 +19,8 @@
 		"LocalPlayerMixin",
 		"TitleScreenMixin",
 		"MouseHandlerMixin",
+		"LivingEntityRendererLabelMixin",
+		"GameRendererAccessor",
 		"MinecraftUserAccessor",
 		"KeyMappingAccessor"
 	],

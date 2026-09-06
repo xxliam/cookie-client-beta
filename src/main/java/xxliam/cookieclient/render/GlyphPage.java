@@ -93,6 +93,50 @@ class GlyphPage {
         uploaded = true;
     }
 
+    /**
+     * 扫描指定 quad 区域内的非透明像素，返回真实墨迹 bbox（相对 quad 左上角，图谱像素）。
+     * <p>
+     * 用于 {@link CustomFont#getGlyphRenderedBounds(char)}：与 {@code getGlyphVisualBounds}
+     * 的 AWT {@code GlyphVector.getVisualBounds} 不同，本方法扫描 {@link GlyphPage} 实际栅格化的
+     * 图谱像素，因此与最终屏幕呈现（quad 上屏 + bilinear 下采样）完全一致；
+     * 字形经过 GASP+FRACTIONALMETRICS 后可能在 atlas 上呈现的 bbox 略宽或略偏。
+     * <p>
+     * 若 quad 完全为空（如空白字符、渲染失败）返回 null。
+     *
+     * @return 长度 4 的数组 [x, y, width, height]（相对 quad 左上角，图谱像素），或 null
+     */
+    int[] scanGlyphInkBounds(int u, int v, int w, int h) {
+        if (atlasImage == null) {
+            return null;
+        }
+        int endX = Math.min(u + w, ATLAS_SIZE);
+        int endY = Math.min(v + h, ATLAS_SIZE);
+        int minX = Integer.MAX_VALUE, maxX = Integer.MIN_VALUE;
+        int minY = Integer.MAX_VALUE, maxY = Integer.MIN_VALUE;
+        boolean found = false;
+        for (int y = Math.max(0, v); y < endY; y++) {
+            for (int x = Math.max(0, u); x < endX; x++) {
+                int a = (atlasImage.getRGB(x, y) >>> 24) & 0xFF;
+                if (a > 0) {
+                    if (x < minX) minX = x;
+                    if (x > maxX) maxX = x;
+                    if (y < minY) minY = y;
+                    if (y > maxY) maxY = y;
+                    found = true;
+                }
+            }
+        }
+        if (!found) {
+            return null;
+        }
+        return new int[]{minX - u, minY - v, maxX - minX + 1, maxY - minY + 1};
+    }
+
+    /** 暴露当前图谱（仅同包内使用）。 */
+    BufferedImage getAtlasImage() {
+        return atlasImage;
+    }
+
     private Glyph renderChar(char c) {
         ensureAtlas();
         graphics.setFont(font);

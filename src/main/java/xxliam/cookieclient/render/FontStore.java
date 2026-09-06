@@ -28,6 +28,10 @@ public final class FontStore {
     public static final CustomFont PRODUCTSANS_BOLD_12 = loadFont(24.0f, "productsans-bold.ttf");
     public static final CustomFont MATERIALICONS_14 = loadFont(28.0f, "materialicons-regular.ttf");
 
+    // ---- ESP 名牌字号（照搬 opal ESPModule：productsans-bold 5px + materialicons-regular 5px） ----
+    public static final CustomFont PRODUCTSANS_BOLD_5 = loadFont(10.0f, "productsans-bold.ttf");
+    public static final CustomFont MATERIALICONS_5 = loadFont(10.0f, "materialicons-regular.ttf");
+
     // ---- 通知卡字号（视觉 7 / 6.5 / 7.5，照搬 opal NotificationsElement 的 7 / 6.5 / 7.5） ----
     public static final CustomFont PRODUCTSANS_BOLD_7 = loadFont(14.0f, "productsans-bold.ttf");
     public static final CustomFont PRODUCTSANS_MEDIUM_6_5 = loadFont(13.0f, "productsans-medium.ttf");

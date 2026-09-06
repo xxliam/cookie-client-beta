@@ -1,8 +1,10 @@
 package xxliam.cookieclient.modules.impl.render.hud;
 
+import com.mojang.blaze3d.vertex.PoseStack;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.GuiGraphics;
 import xxliam.cookieclient.CookieClient;
+import xxliam.cookieclient.gui.NewClickGui;
 import xxliam.cookieclient.modules.Category;
 import xxliam.cookieclient.modules.Module;
 import xxliam.cookieclient.render.FontStore;
@@ -14,6 +16,7 @@ import xxliam.cookieclient.settings.impl.NumberSetting;
 import xxliam.cookieclient.utils.animation.SmoothAnimationTimer;
 import xxliam.cookieclient.utils.math.Easings;
 import xxliam.cookieclient.utils.render.ColorUtil;
+import xxliam.cookieclient.utils.render.RenderHelper;
 import xxliam.cookieclient.utils.render.ThemeHelper;
 
 import java.util.ArrayList;
@@ -32,6 +35,9 @@ import java.util.List;
  * 锚定侧：opal 原版 {@code ToggledModulesElement} 固定渲染在屏幕右缘，没有左缘模式。
  * 这里新增 {@code Side=Left}：把 opal 的右缘几何整体做水平镜像（行贴左缘、文字靠左、
  * bar 随 barMode 镜像到行内侧/外侧、隐藏目标 +8 对应滑出左缘），默认 Right 保持原版观感。
+ * <p>
+ * {@code Scale} 滑条(50%~150%，100=原大小)对整列做等比缩放，原点取 ModuleList 所在侧的顶角
+ * （Right→屏幕右上角、Left→屏幕左上角）：行始终贴住顶角、向对角方向放大/收拢。
  */
 public class ModuleList extends Module {
 
@@ -41,6 +47,12 @@ public class ModuleList extends Module {
 
     /** 锚定侧：Right=opal 原版右缘；Left=镜像到左缘（opal 无此模式，属扩展）。 */
     private final ModeSetting side;
+    /** 整列缩放百分比（50~150，100=原大小；除以 100 得等比缩放系数）。 */
+    private final NumberSetting scale;
+    /** X 拖动偏移（ClickGUI 隐藏时的拖拽态专用；隐藏设置项，仅用于持久化）。 */
+    private final NumberSetting offsetX;
+    /** Y 拖动偏移（同上）。 */
+    private final NumberSetting offsetY;
     private final ModeSetting barMode;
     private final BooleanSetting lowercase;
     private final BooleanSetting showSuffix;
@@ -66,12 +78,18 @@ public class ModuleList extends Module {
             categoryNames[i] = Category.values()[i].getDisplayName();
         }
         side = new ModeSetting("Side", "Right", "Left").withDefault("Right");
+        scale = new NumberSetting("Scale", 100, 50, 150, 1);
+        offsetX = new NumberSetting("X offset", 0.0d, -10000.0d, 10000.0d, 1.0d, () -> false);
+        offsetY = new NumberSetting("Y offset", 0.0d, -10000.0d, 10000.0d, 1.0d, () -> false);
         barMode = new ModeSetting("Bar mode", "Left", "Right", "None").withDefault("Left");
         lowercase = new BooleanSetting("Lowercase", true);
         showSuffix = new BooleanSetting("Show suffix", true);
         backgroundOpacity = new NumberSetting("Background opacity", 128, 0, 255, 1);
         visibleCategories = new MultiSelectSetting("Visible categories", categoryNames).withDefaults(categoryNames);
 
+        addSetting(scale);
+        addSetting(offsetX);
+        addSetting(offsetY);
         addSetting(side);
         addSetting(barMode);
         addSetting(lowercase);
@@ -159,6 +177,23 @@ public class ModuleList extends Module {
         boolean rightSide = "Right".equals(side.getValue());
         boolean leftBar = "Left".equals(bar);
 
+        // ClickGUI 处于隐藏（折叠）态时进入「布局编辑态」：整列被白色半透明框圈住，可拖动
+        boolean editMode = mc.screen instanceof NewClickGui gui && gui.isHidden();
+
+        // 整列偏移（拖动）→ 等比缩放（原点 = ModuleList 所在侧顶角）。偏移在缩放之外：
+        // 先 translate 把整块从默认贴边位置挪开，再以顶角为轴缩放，两者互不影响。
+        float ox = getOffsetX();
+        float oy = getOffsetY();
+        float factor = scale.getValue().floatValue() / 100.0f;
+        PoseStack pose = guiGraphics.pose();
+        pose.pushPose();
+        pose.translate(ox, oy, 0.0f);
+        RenderHelper.pushScaleAround(pose, rightSide ? (float) scaledWidth : 0.0f, 0.0f, factor);
+
+        // 行背景包围盒（基坐标，未含缩放/偏移；编辑态边框用）
+        float minXb = Float.MAX_VALUE, maxXb = Float.MIN_VALUE;
+        float minYb = Float.MAX_VALUE, maxYb = Float.MIN_VALUE;
+
         for (int i = 0; i < visibleList.size(); i++) {
             Entry entry = visibleList.get(i);
 
@@ -188,6 +223,11 @@ public class ModuleList extends Module {
                 barX = leftBar ? 3.5f - vx : 1.5f - vx - w;              // bar 镜像到行内侧/外侧
             }
 
+            minXb = Math.min(minXb, bgLeft);
+            maxXb = Math.max(maxXb, bgLeft + w + 6.5f);
+            minYb = Math.min(minYb, posY);
+            maxYb = Math.max(maxYb, posY + OFFSET);
+
             // 行背景（直角矩形，opal rect(posX-6.5F, posY, width+6.5F, OFFSET, 0x80090909)）；
             // alpha 由 Background opacity 滑块(0-255)控制，默认 128 = opal 原版 0x80
             // 边缘晕开：drawShadow tint 用与背景同色同 alpha，高斯纹理 alpha 中心→边缘天然衰减，
@@ -211,6 +251,109 @@ public class ModuleList extends Module {
             FontStore.PRODUCTSANS_MEDIUM_8.drawStringWithShadow(guiGraphics.pose(), entry.text,
                     textX, posY + 2.5f, rowColor);
         }
+
+        // ClickGUI 隐藏态的编辑框：白色 80% 边框，宽=顶部长度（最宽行的全长）、高=贴屏边缘那列的高度。
+        // 画在行之上（外圈描边），与行同一变换空间，自动跟随 Scale 与拖动偏移。
+        if (editMode && visibleList.size() > 0 && minXb <= maxXb && minYb <= maxYb) {
+            drawEditFrame(guiGraphics.pose(), minXb, minYb, maxXb - minXb, maxYb - minYb);
+        }
+        RenderHelper.popPose(pose);
+        pose.popPose();
+    }
+
+    /** 布局编辑态边框：白色不透明度 80%（0xCCFFFFFF）的 1px 四边描边。 */
+    private static void drawEditFrame(PoseStack pose, float x, float y, float w, float h) {
+        int border = 0xCCFFFFFF;
+        Renderer.drawRect(pose, x, y, w, 1.0f, border);                  // 上边
+        Renderer.drawRect(pose, x, y + h - 1.0f, w, 1.0f, border);       // 下边
+        Renderer.drawRect(pose, x, y, 1.0f, h, border);                  // 左边
+        Renderer.drawRect(pose, x + w - 1.0f, y, 1.0f, h, border);       // 右边
+    }
+
+    // ---------------------------------------------------------------------
+    // ClickGUI 隐藏态拖动（由 NewClickGui 在 hidden 时路由）
+    // ---------------------------------------------------------------------
+
+    public float getOffsetX() {
+        return offsetX.getValue().floatValue();
+    }
+
+    public float getOffsetY() {
+        return offsetY.getValue().floatValue();
+    }
+
+    /** 以 (nx, ny) 为期望偏移落点，钳制到屏幕内后写回（边框不出屏）。 */
+    public void setDraggedOffset(float nx, float ny) {
+        float[] limits = getOffsetLimits();
+        if (limits == null) {
+            return;
+        }
+        offsetX.setValue((double) Math.max(limits[0], Math.min(limits[1], nx)));
+        offsetY.setValue((double) Math.max(limits[2], Math.min(limits[3], ny)));
+    }
+
+    /** 包围框（含 Scale + 偏移换算后的屏幕坐标）：{x0, y0, x1, y1}；无可视行返回 null。 */
+    public float[] getFrameExtents() {
+        float[] noOffset = computeNoOffsetExtents();
+        if (noOffset == null) {
+            return null;
+        }
+        float ox = getOffsetX();
+        float oy = getOffsetY();
+        return new float[]{noOffset[0] + ox, noOffset[1] + oy, noOffset[2] + ox, noOffset[3] + oy};
+    }
+
+    /** 屏幕点是否落在包围框内（±2px 容差，便于点中边缘）。 */
+    public boolean isFrameHit(double mouseX, double mouseY) {
+        float[] e = getFrameExtents();
+        return e != null && mouseX >= e[0] - 2.0 && mouseX <= e[2] + 2.0
+                && mouseY >= e[1] - 2.0 && mouseY <= e[3] + 2.0;
+    }
+
+    /** 偏移允许范围 {minX, maxX, minY, maxY}：保证框完全落在屏幕内。 */
+    public float[] getOffsetLimits() {
+        float[] e = computeNoOffsetExtents();
+        if (e == null) {
+            return null;
+        }
+        Minecraft mc = Minecraft.getInstance();
+        int sw = mc.getWindow().getGuiScaledWidth();
+        int sh = mc.getWindow().getGuiScaledHeight();
+        return new float[]{-e[0], sw - e[2], -e[1], sh - e[3]};
+    }
+
+    /**
+     * 包围框在零偏移下的屏幕极值 {x0, y0, x1, y1}：
+     * 行背景基坐标经「顶角为原点」的等比例缩放后，再与拖动偏移线性相加。
+     */
+    private float[] computeNoOffsetExtents() {
+        if (visibleList.isEmpty()) {
+            return null;
+        }
+        Minecraft mc = Minecraft.getInstance();
+        int scaledWidth = mc.getWindow().getGuiScaledWidth();
+        boolean rightSide = "Right".equals(side.getValue());
+        float factor = scale.getValue().floatValue() / 100.0f;
+
+        float minXb = Float.MAX_VALUE, maxXb = Float.MIN_VALUE;
+        float minYb = Float.MAX_VALUE, maxYb = Float.MIN_VALUE;
+        for (Entry entry : visibleList) {
+            float vx = entry.xAnim.getValueF();
+            float posY = entry.yAnim.getValueF();
+            float w = entry.width;
+            float bgLeft = rightSide ? vx + scaledWidth - 6.5f : -vx - w;
+            minXb = Math.min(minXb, bgLeft);
+            maxXb = Math.max(maxXb, bgLeft + w + 6.5f);
+            minYb = Math.min(minYb, posY);
+            maxYb = Math.max(maxYb, posY + OFFSET);
+        }
+        float cornerX = rightSide ? (float) scaledWidth : 0.0f;
+        return new float[]{
+                cornerX + factor * (minXb - cornerX),
+                factor * minYb,
+                cornerX + factor * (maxXb - cornerX),
+                factor * maxYb
+        };
     }
 
     /** 每个模块的列表条目：文字/宽度/目标坐标 + x/y 动画（照搬 opal ModuleElement）。 */

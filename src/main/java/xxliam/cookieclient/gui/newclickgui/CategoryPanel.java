@@ -73,7 +73,9 @@ public class CategoryPanel extends UIElement {
         if (isHovered) {
             NewClickGui.focusedPanel = this;
         }
-        scaleTimer.animate(clickGui.isClosing() ? 0.0 : 1.0, clickGui.isClosing() ? 0.22 : 0.32, Easings.BACK_OUT);
+        // 面板入场动画；closing（真正关闭）或 hidden（右下按钮折叠，非关闭）时同样收拢
+        boolean invisible = clickGui.isClosing() || clickGui.isHidden();
+        scaleTimer.animate(invisible ? 0.0 : 1.0, invisible ? 0.22 : 0.32, Easings.BACK_OUT);
         scaleTimer.tick();
         float totalContentHeight = 0.0f;
         for (ModuleElement moduleElement : moduleElements) {
@@ -105,9 +107,9 @@ public class CategoryPanel extends UIElement {
                 posX + 8.0f, posY + (20.0f - FontStore.AXIFORMA_EXTRABOLD_18.getFontHeight()) / 2.0f + 3.0f, ColorUtil.withAlpha(-1, alpha));
         float scrollOffset = scrollTimer.getValueF();
         float elementY = posY + 20.0f - scrollOffset;
-        // scissor 不受 Pose 矩阵影响：模块列表裁剪区域须换算到 GUI_SCALE 缩放后的 GUI 逻辑坐标。
-        // 注意：要走 pushScissorScreen（已 GUI_SCALE，仅内部再 ×guiScale），绝不能再用 pushScissor
-        // 否则会被双重缩放出有效屏幕，导致与父裁剪求交后 width=0，灰色背景失去裁剪而溢出。
+        // scissor 不受 Pose 矩阵影响：模块列表裁剪区域须换算到 GUI_SCALE 整体缩放后的屏幕坐标。
+        // 注意：要走 pushScissorScreen（输入已含整体缩放系数，仅内部再 ×guiScale），绝不能再用
+        // pushScissor，否则双重缩放（×GUI_SCALE 又 ×guiScale）会让裁剪矩形失配而溢出。
         int clipX = Math.round(clickGui.toScaledX(posX));
         int clipY = Math.round(clickGui.toScaledY(posY + 20.0f));
         int clipW = Math.max(1, Math.round(120.0f * NewClickGui.GUI_SCALE));

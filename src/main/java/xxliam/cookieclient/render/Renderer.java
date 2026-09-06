@@ -13,7 +13,10 @@ import net.minecraft.client.gui.GuiGraphics;
 import net.minecraft.client.renderer.GameRenderer;
 import net.minecraft.client.renderer.texture.DynamicTexture;
 import org.joml.Matrix4f;
+import org.lwjgl.opengl.GL11;
+import org.lwjgl.opengl.GL13;
 import org.lwjgl.opengl.GL20;
+import org.lwjgl.opengl.GL30;
 import xxliam.cookieclient.render.shader.ShaderFormats;
 import xxliam.cookieclient.render.shader.ShaderProgram;
 
@@ -186,6 +189,18 @@ public final class Renderer {
     private static final Map<Integer, DynamicTexture> SHADOW_CACHE = new HashMap<>();
     private static ShaderProgram ROUNDED_RECT_SHADER;
 
+    // ---------------------------------------------------------------------
+    // 后屏模糊（名牌底 frosted 效果；照搬 opal 的 BLUR_PAINT 图层语义）
+    // ---------------------------------------------------------------------
+
+    /** 每帧是否已抓取过后屏纹理（由 GuiMixin 在每帧渲染开始时重置）。 */
+    private static boolean screenBlurDirty = true;
+    private static boolean screenBlurCaptured;
+    private static int screenTexId;
+    private static int screenTexW = -1;
+    private static int screenTexH = -1;
+    private static ShaderProgram ROUNDED_TEXTURE_SHADER;
+
     /** 以 GUI 逻辑坐标裁剪到指定矩形（用于滚动列表等内容裁剪）。 */
     public static void pushScissor(int x, int y, int width, int height) {
         Minecraft mc = Minecraft.getInstance();
@@ -203,9 +218,9 @@ public final class Renderer {
     /**
      * 推入屏幕像素坐标的 scissor（不再 ×guiScale）。
      * <p>
-     * 适用场景：调用方已经在 GUI 逻辑空间里应用过其他非单位缩放（例如整体 GUI_SCALE），
+     * 适用场景：调用方已经在 GUI 逻辑空间里应用过其他非单位缩放（例如 ClickGUI 的整体 Scale 系数），
      * 却又不受 Pose 矩阵影响的裁剪（例如模块列表裁剪）；此时要让 scissor 紧贴实际绘制矩形。
-     * 输入的 {@code x/y/width/height} 已经是 GUI 逻辑 × GUI_SCALE，再乘以 {@code getGuiScale()} 就得到屏幕像素。
+     * 输入的 {@code x/y/width/height} 已经是 GUI 逻辑 × 整体缩放系数，再乘以 {@code getGuiScale()} 就得到屏幕像素。
      */
     public static void pushScissorScreen(int x, int y, int width, int height) {
         if (width <= 0 || height <= 0) {
@@ -400,6 +415,137 @@ public final class Renderer {
             buffer.vertex(matrix, x, y, 0.0f).color(color).endVertex();
             prevX = x;
             prevY = y;
+        }
+    }
+
+    // ---------------------------------------------------------------------
+    // 后屏模糊（名牌底 frosted 效果；近似 opal BLUR_PAINT 图层）
+    // 渲染链：GuiMixin 每帧开头置 dirty -> ESP 需要时 glCopy 主帧缓冲到低分辨率
+    // mipmap 纹理（GL 行序 bottom-up）-> 用「圆角裁剪 + 纹理采样」的 shader 画回名牌底。
+    // ---------------------------------------------------------------------
+
+    /** GuiMixin 每帧渲染模块前调用：标记本帧尚未抓屏。 */
+    public static void markScreenBlurDirty() {
+        screenBlurDirty = true;
+        screenBlurCaptured = false;
+    }
+
+    /**
+     * 从当前主帧缓冲拷贝一帧到 RGBA mipmap 纹理（尺寸与帧缓冲一致，采样走 mip 模拟模糊）。
+     * 仅当 {@code screenBlurDirty} 时执行一次。
+     */
+    private static void captureScreenBlurIfNeeded() {
+        if (screenBlurCaptured || !screenBlurDirty) {
+            return;
+        }
+        screenBlurDirty = false;
+        screenBlurCaptured = true;
+        Minecraft mc = Minecraft.getInstance();
+        com.mojang.blaze3d.pipeline.RenderTarget target = mc.getMainRenderTarget();
+        if (target == null) {
+            return;
+        }
+        int fbW = mc.getWindow().getWidth();
+        int fbH = mc.getWindow().getHeight();
+        if (fbW <= 0 || fbH <= 0) {
+            return;
+        }
+        try {
+            if (screenTexId == 0 || screenTexW != fbW || screenTexH != fbH) {
+                if (screenTexId != 0) {
+                    GL11.glDeleteTextures(screenTexId);
+                }
+                screenTexId = GL11.glGenTextures();
+                GL11.glBindTexture(GL11.GL_TEXTURE_2D, screenTexId);
+                GL11.glTexParameteri(GL11.GL_TEXTURE_2D, GL11.GL_TEXTURE_MIN_FILTER, GL11.GL_LINEAR_MIPMAP_LINEAR);
+                GL11.glTexParameteri(GL11.GL_TEXTURE_2D, GL11.GL_TEXTURE_MAG_FILTER, GL11.GL_LINEAR);
+                GL11.glTexParameteri(GL11.GL_TEXTURE_2D, GL11.GL_TEXTURE_WRAP_S, GL30.GL_CLAMP_TO_EDGE);
+                GL11.glTexParameteri(GL11.GL_TEXTURE_2D, GL11.GL_TEXTURE_WRAP_T, GL30.GL_CLAMP_TO_EDGE);
+                GL11.glTexImage2D(GL11.GL_TEXTURE_2D, 0, GL11.GL_RGBA8, fbW, fbH, 0, GL11.GL_RGBA, GL11.GL_UNSIGNED_BYTE, 0);
+                screenTexW = fbW;
+                screenTexH = fbH;
+            } else {
+                GL11.glBindTexture(GL11.GL_TEXTURE_2D, screenTexId);
+            }
+
+            int prevTexture = GL11.glGetInteger(GL11.GL_TEXTURE_BINDING_2D);
+            int prevReadBuffer = GL11.glGetInteger(GL11.GL_READ_BUFFER);
+            target.bindRead();
+            GL11.glReadBuffer(GL30.GL_COLOR_ATTACHMENT0);
+            GL11.glCopyTexSubImage2D(GL11.GL_TEXTURE_2D, 0, 0, 0, 0, 0, fbW, fbH);
+            GL30.glGenerateMipmap(GL11.GL_TEXTURE_2D);
+            target.unbindRead();
+            GL11.glReadBuffer(prevReadBuffer);
+            GL11.glBindTexture(GL11.GL_TEXTURE_2D, prevTexture);
+        } catch (Exception e) {
+            // 抓屏失败静默降级：名牌只画半透明黑底（同 opal 第二层）
+            screenBlurCaptured = true;
+        }
+    }
+
+    /**
+     * 用当前后屏模糊纹理填充一个「圆角裁剪」的矩形（名牌背景的模糊层）。
+     * <p>
+     * @param x/y/w/h  GUI 逻辑坐标矩形
+     * @param radius    圆角半径
+     * @param lod       采样 mip 层级，越大越模糊（opal 无此参数；推荐 2~3）
+     */
+    public static void drawScreenBlur(PoseStack poseStack, float x, float y, float w, float h, float radius, float lod) {
+        if (w <= 0.0f || h <= 0.0f || screenTexId == 0) {
+            return;
+        }
+        captureScreenBlurIfNeeded();
+        if (screenTexId == 0 || screenTexW <= 0 || screenTexH <= 0) {
+            return;
+        }
+        Minecraft mc = Minecraft.getInstance();
+        float guiScale = (float) mc.getWindow().getGuiScale();
+        // GUI 逻辑坐标 -> 帧缓冲物理像素
+        float physX = x * guiScale;
+        float physY = y * guiScale;
+        float physW = w * guiScale;
+        float physH = h * guiScale;
+        float fbW = screenTexW;
+        float fbH = screenTexH;
+        // 纹理 v 轴 bottom-up（GL 行序），clip 于帧内
+        float u0 = Math.max(0.0f, Math.min(1.0f, physX / fbW));
+        float u1 = Math.max(0.0f, Math.min(1.0f, (physX + physW) / fbW));
+        float vTop = Math.max(0.0f, Math.min(1.0f, 1.0f - physY / fbH));
+        float vBottom = Math.max(0.0f, Math.min(1.0f, 1.0f - (physY + physH) / fbH));
+
+        ensureRoundedTextureShader();
+        if (ROUNDED_TEXTURE_SHADER == null || !ROUNDED_TEXTURE_SHADER.isValid()) {
+            return;
+        }
+        Matrix4f matrix = poseStack.last().pose();
+        ROUNDED_TEXTURE_SHADER.use();
+        GL20.glUniform2f(ROUNDED_TEXTURE_SHADER.getUniformLocation("Size"), w, h);
+        GL20.glUniform1f(ROUNDED_TEXTURE_SHADER.getUniformLocation("Radius"), Math.max(radius, 0.0f));
+        GL20.glUniform1f(ROUNDED_TEXTURE_SHADER.getUniformLocation("Smoothness"), 1.0f);
+        GL20.glUniform1i(ROUNDED_TEXTURE_SHADER.getUniformLocation("ScreenTex"), 0);
+        GL20.glUniform4f(ROUNDED_TEXTURE_SHADER.getUniformLocation("Region"), u0, vBottom, u1, vTop);
+        GL20.glUniform1f(ROUNDED_TEXTURE_SHADER.getUniformLocation("Lod"), lod);
+
+        int prevTexture = GL11.glGetInteger(GL11.GL_TEXTURE_BINDING_2D);
+        GL13.glActiveTexture(GL13.GL_TEXTURE0);
+        GL11.glBindTexture(GL11.GL_TEXTURE_2D, screenTexId);
+        RenderSystem.enableBlend();
+        RenderSystem.defaultBlendFunc();
+        BufferBuilder buffer = Tesselator.getInstance().getBuilder();
+        buffer.begin(VertexFormat.Mode.QUADS, DefaultVertexFormat.POSITION_TEX_COLOR);
+        buffer.vertex(matrix, x, y, 0.0f).uv(0.0f, 0.0f).color(1.0f, 1.0f, 1.0f, 1.0f).endVertex();
+        buffer.vertex(matrix, x, y + h, 0.0f).uv(0.0f, 1.0f).color(1.0f, 1.0f, 1.0f, 1.0f).endVertex();
+        buffer.vertex(matrix, x + w, y + h, 0.0f).uv(1.0f, 1.0f).color(1.0f, 1.0f, 1.0f, 1.0f).endVertex();
+        buffer.vertex(matrix, x + w, y, 0.0f).uv(1.0f, 0.0f).color(1.0f, 1.0f, 1.0f, 1.0f).endVertex();
+        BufferUploader.draw(buffer.end());
+        RenderSystem.disableBlend();
+        ROUNDED_TEXTURE_SHADER.stopUsing();
+        GL11.glBindTexture(GL11.GL_TEXTURE_2D, prevTexture);
+    }
+
+    private static void ensureRoundedTextureShader() {
+        if (ROUNDED_TEXTURE_SHADER == null) {
+            ROUNDED_TEXTURE_SHADER = new ShaderProgram("rounded_texture", "vertex_color", ShaderFormats.POSITION_UV_COLOR);
         }
     }
 }

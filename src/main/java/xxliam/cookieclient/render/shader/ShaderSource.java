@@ -55,6 +55,36 @@ public enum ShaderSource {
             "    OutColor = vec4(FragColor.rgb, smoothedAlpha);\n" +
             "}\n"),
 
+    ROUNDED_TEXTURE("rounded_texture.fsh",
+            "#version 150\n" +
+            "\n" +
+            "in vec2 TexCoord;\n" +
+            "in vec4 FragColor;\n" +
+            "\n" +
+            "uniform vec2 Size;\n" +
+            "uniform float Radius;\n" +
+            "uniform float Smoothness;\n" +
+            "uniform sampler2D ScreenTex;\n" +
+            "uniform vec4 Region;\n" +
+            "uniform float Lod;\n" +
+            "\n" +
+            "out vec4 OutColor;\n" +
+            "\n" +
+            "float roundSDF(vec2 p, vec2 b, float r) {\n" +
+            "    return length(max(abs(p) - b, 0.0)) - r;\n" +
+            "}\n" +
+            "\n" +
+            "void main() {\n" +
+            "    vec2 halfSize = Size * .5;\n" +
+            "    float smoothedAlpha = (1.0 - smoothstep(1.0 - Smoothness, 1.0, roundSDF(halfSize - (TexCoord * Size), halfSize - Radius - Smoothness * 0.5f, Radius))) * FragColor.a;\n" +
+            "\n" +
+            "    if (smoothedAlpha <= 0.0) discard;\n" +
+            "\n" +
+            "    vec2 uv = mix(Region.xy, Region.zw, TexCoord);\n" +
+            "    vec4 texel = textureLod(ScreenTex, uv, Lod);\n" +
+            "    OutColor = vec4(texel.rgb * FragColor.rgb, texel.a * smoothedAlpha);\n" +
+            "}\n"),
+
     RING("ring.fsh",
             "#version 150\n" +
             "\n" +

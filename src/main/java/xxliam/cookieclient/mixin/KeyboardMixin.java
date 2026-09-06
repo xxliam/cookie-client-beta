@@ -11,7 +11,10 @@ import xxliam.cookieclient.CookieClient;
 import xxliam.cookieclient.gui.NewClickGui;
 
 /**
- * 键盘监听：按下右 Shift 打开 / 关闭 ClickGUI；游戏内按键触发已绑定模块的开关。
+ * 键盘监听：游戏内按右 Shift 打开 ClickGUI，按绑定键触发已绑定模块的开关。
+ * <p>
+ * 仅当没有 Screen 打开时生效（界面打开时按键全部交给 {@code Screen.keyPressed}，
+ * ClickGUI 自身的关闭 / Bind 监听都走 GUI 事件，不在此处处理）。
  */
 @Mixin(KeyboardHandler.class)
 public class KeyboardMixin {
@@ -25,17 +28,15 @@ public class KeyboardMixin {
         if (action != GLFW.GLFW_PRESS) {
             return;
         }
-        // 游戏内（无界面）：触发绑定到该按键的模块开关
-        if (mc.screen == null && CookieClient.MODULE_MANAGER != null) {
-            CookieClient.MODULE_MANAGER.onKeyPress(key);
+        if (mc.screen != null) {
+            return;
         }
-        // 右 Shift：打开 / 关闭 ClickGUI
         if (key == GLFW.GLFW_KEY_RIGHT_SHIFT) {
-            if (mc.screen == null) {
-                mc.setScreen(new NewClickGui());
-            } else if (mc.screen instanceof NewClickGui) {
-                mc.screen.onClose();
-            }
+            mc.setScreen(new NewClickGui());
+            return;
+        }
+        if (CookieClient.MODULE_MANAGER != null) {
+            CookieClient.MODULE_MANAGER.onKeyPress(key);
         }
     }
 }
