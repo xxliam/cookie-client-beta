@@ -45,6 +45,14 @@ public class ModuleList extends Module {
     /** 行高（opal ModuleElement.OFFSET = 12）。 */
     public static final float OFFSET = 12.0f;
 
+    /**
+     * 布局拖动的轴模式开关（自由移动实现已保留，勿删，后期备用）：
+     * true = 自由双向拖动（旧行为：可沿 x/y 任意挪动，边框不出屏）；
+     * false = 贴边垂直模式（当前默认）：ModuleList 只能贴着所在屏幕边缘（Right→右缘 / Left→左缘）
+     * 上下移动，水平偏移恒为 0；历史 X offset 仅持久化备用，渲染/命中一律忽略。
+     */
+    public static final boolean FREE_DRAG = false;
+
     /** 锚定侧：Right=opal 原版右缘；Left=镜像到左缘（opal 无此模式，属扩展）。 */
     private final ModeSetting side;
     /** 整列缩放百分比（50~150，100=原大小；除以 100 得等比缩放系数）。 */
@@ -182,7 +190,7 @@ public class ModuleList extends Module {
 
         // 整列偏移（拖动）→ 等比缩放（原点 = ModuleList 所在侧顶角）。偏移在缩放之外：
         // 先 translate 把整块从默认贴边位置挪开，再以顶角为轴缩放，两者互不影响。
-        float ox = getOffsetX();
+        float ox = getEffectiveOffsetX();
         float oy = getOffsetY();
         float factor = scale.getValue().floatValue() / 100.0f;
         PoseStack pose = guiGraphics.pose();
@@ -282,6 +290,15 @@ public class ModuleList extends Module {
         return offsetY.getValue().floatValue();
     }
 
+    /**
+     * 水平拖动偏移在渲染 / 编辑框命中中的实际取值：
+     * 贴边垂直模式（{@link #FREE_DRAG}=false）恒为 0（列表贴着屏幕边缘），
+     * X offset 设置项原值保留不动，仅作后期开启自由移动时的备用。
+     */
+    public float getEffectiveOffsetX() {
+        return FREE_DRAG ? getOffsetX() : 0.0f;
+    }
+
     /** 以 (nx, ny) 为期望偏移落点，钳制到屏幕内后写回（边框不出屏）。 */
     public void setDraggedOffset(float nx, float ny) {
         float[] limits = getOffsetLimits();
@@ -298,7 +315,7 @@ public class ModuleList extends Module {
         if (noOffset == null) {
             return null;
         }
-        float ox = getOffsetX();
+        float ox = getEffectiveOffsetX();
         float oy = getOffsetY();
         return new float[]{noOffset[0] + ox, noOffset[1] + oy, noOffset[2] + ox, noOffset[3] + oy};
     }

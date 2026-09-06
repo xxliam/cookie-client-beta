@@ -185,10 +185,15 @@ public class NewClickGui extends Screen {
 
     @Override
     public boolean mouseDragged(double mouseX, double mouseY, int button, double dragX, double dragY) {
-        // ModuleList 布局拖动：跟随光标并把目标偏移钳制在屏幕内（边框不超出屏幕）
+        // ModuleList 布局拖动：跟随光标并把目标偏移钳制在屏幕内（边框不超出屏幕）。
+        // FREE_DRAG=true（自由双向）时沿用下方完整自由移动计算（备用，勿删）；
+        // 当前贴边垂直模式（false）仅锁定水平分量 = 拖动基准，列表只能沿屏幕边缘上下移动。
         if (moduleDragActive && ModuleList.INSTANCE != null) {
             float nx = moduleDragBaseOffsetX + (float) (mouseX - moduleDragStartX);
             float ny = moduleDragBaseOffsetY + (float) (mouseY - moduleDragStartY);
+            if (!ModuleList.FREE_DRAG) {
+                nx = moduleDragBaseOffsetX;
+            }
             ModuleList.INSTANCE.setDraggedOffset(nx, ny);
             return true;
         }

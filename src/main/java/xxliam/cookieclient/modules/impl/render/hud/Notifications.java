@@ -6,6 +6,7 @@ import xxliam.cookieclient.CookieClient;
 import xxliam.cookieclient.modules.Category;
 import xxliam.cookieclient.modules.Module;
 import xxliam.cookieclient.notification.Notification;
+import xxliam.cookieclient.notification.NotificationSounds;
 import xxliam.cookieclient.notification.NotificationType;
 import xxliam.cookieclient.render.CustomFont;
 import xxliam.cookieclient.render.FontStore;
@@ -35,6 +36,9 @@ public class Notifications extends Module {
     /** 模块开关时是否弹出通知（opal NotificationSettings「On module toggle」默认 false）。 */
     public final BooleanSetting toggleNotifications = new BooleanSetting("On module toggle", false);
 
+    /** 开关通知是否附带提示音：模块开启播 on / 关闭播 off（用户可选是否开启音效）。 */
+    public final BooleanSetting sound = new BooleanSetting("Sound", true);
+
     private static final float PADDING = 3.0f;
     private static final float HEIGHT = 21.0f;
     private static final float ICON_SIZE = 14.0f;
@@ -47,6 +51,7 @@ public class Notifications extends Module {
         INSTANCE = this;
         setVisible(false); // HUD 基础设施，不进 ModuleList 列表
         addSetting(toggleNotifications);
+        addSetting(sound);
     }
 
     /** 模块被切换时调用（照搬 opal 的模块开关通知；HUD 基础设施不通知）。 */
@@ -63,6 +68,9 @@ public class Notifications extends Module {
                 module.getName(),
                 enabled ? "enabled" : "disabled",
                 2000);
+        if (INSTANCE.sound.getValue()) {
+            NotificationSounds.play(enabled);
+        }
     }
 
     @Override

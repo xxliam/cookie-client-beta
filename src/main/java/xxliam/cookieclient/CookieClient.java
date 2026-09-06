@@ -8,6 +8,7 @@ import xxliam.cookieclient.manager.ConfigManager;
 import xxliam.cookieclient.manager.ModuleManager;
 import xxliam.cookieclient.manager.TargetManager;
 import xxliam.cookieclient.notification.NotificationManager;
+import xxliam.cookieclient.notification.NotificationSounds;
 
 /**
  * Cookie Client 主入口。
@@ -36,6 +37,9 @@ public class CookieClient implements ModInitializer {
         CONFIG_MANAGER = new ConfigManager();
         TARGET_MANAGER = new TargetManager();
         NOTIFICATION_MANAGER = new NotificationManager();
+
+        // 注册通知提示音（notify.on / notify.off，对应 assets 下 sounds.json 与 notify_on/off.ogg）
+        NotificationSounds.register();
 
         // 加载本地配置（不存在则跳过）
         CONFIG_MANAGER.load();

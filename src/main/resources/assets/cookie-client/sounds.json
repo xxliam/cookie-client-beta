@@ -1,0 +1,12 @@
+{
+  "notify.on": {
+    "sounds": [
+      "cookie-client:notify_on"
+    ]
+  },
+  "notify.off": {
+    "sounds": [
+      "cookie-client:notify_off"
+    ]
+  }
+}
