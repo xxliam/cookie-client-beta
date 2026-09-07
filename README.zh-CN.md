@@ -19,7 +19,7 @@
 
 ## 项目简介
 
-**Cookie Client** 是一个基于 **Fabric** 模组加载器的 Minecraft **1.20.1** PVP 客户端，全部使用 **Java** 编写。整体架构参考经典开源客户端 [OpenZen](https://github.com/OpenZenTeam/OpenZen)（`shit.zen` 包布局），HUD / ESP / 通知 / 主题体系是对 [OpenOpal](https://github.com/Opal-Client/OpenOpal) 元素的忠实移植，自定义主菜单为 Setsuna 菜单的高保真移植。
+**Cookie Client** 是一个基于 **Fabric** 模组加载器的 Minecraft **1.20.1** PVP 客户端，全部使用 **Java** 编写。整体架构参考经典开源客户端 [OpenZen](https://github.com/OpenZenTeam/OpenZen)，HUD / ESP / 通知 / 主题体系是对 [OpenOpal](https://github.com/Opal-Client/OpenOpal) 元素的忠实移植，自定义主菜单为 Setsuna 菜单的高保真移植。
 
 项目尤其注重渲染质量：从 ClickGUI 面板、HUD 行到主菜单，全部使用真实栅格字体、超采样抗锯齿软阴影与缓动动画绘制。目前处于 **beta 早期阶段**：框架、GUI、HUD 与渲染栈已经就位，部分玩法模块仍是骨架。
 
