@@ -5,7 +5,8 @@ import net.minecraft.client.KeyMapping;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.screens.ChatScreen;
 import net.minecraft.client.player.Input;
-import xxliam.cookieclient.gui.NewClickGui;
+import xxliam.cookieclient.gui.newclickgui.NewClickGui;
+import xxliam.cookieclient.gui.dropdownclickgui.DropdownClickGui;
 import xxliam.cookieclient.modules.Category;
 import xxliam.cookieclient.modules.Module;
 
@@ -42,7 +43,8 @@ public class GuiMove extends Module {
         if (mc.screen instanceof ChatScreen) {
             return false;
         }
-        return mc.screen instanceof NewClickGui;
+        // 两种 ClickGUI 风格都放行：Zen（NewClickGui）与 Opal（DropdownClickGui）
+        return mc.screen instanceof NewClickGui || mc.screen instanceof DropdownClickGui;
     }
 
     private static boolean isMovementKey(KeyMapping keyMapping) {

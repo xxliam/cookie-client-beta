@@ -37,4 +37,28 @@ public final class DropdownRender {
     public static void iconCentered(GuiGraphics g, CustomFont font, String icon, float cx, float cy, int color) {
         centered(g, font, icon, cx, cy, color);
     }
+
+    /** GLFW 键码 → 显示名（Mouse4~8 / GLFW 命名同规则，仅取短名）。 */
+    public static String keyName(int key) {
+        if (key >= 3 && key <= 7) {
+            return "Mouse " + (key + 1);
+        }
+        String glfwName = org.lwjgl.glfw.GLFW.glfwGetKeyName(key, 0);
+        if (glfwName != null && !glfwName.isEmpty()) {
+            return glfwName.toUpperCase();
+        }
+        return switch (key) {
+            case 340 -> "L_SHIFT";
+            case 344 -> "R_SHIFT";
+            case 341 -> "L_CTRL";
+            case 345 -> "R_CTRL";
+            case 342 -> "L_ALT";
+            case 346 -> "R_ALT";
+            case 258 -> "TAB";
+            case 257 -> "ENTER";
+            case 259 -> "BACKSPACE";
+            case 256 -> "ESC";
+            default -> "KEY_" + key;
+        };
+    }
 }

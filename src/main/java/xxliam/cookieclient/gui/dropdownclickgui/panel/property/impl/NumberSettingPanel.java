@@ -83,7 +83,7 @@ public class NumberSettingPanel extends PropertyPanel {
 
     @Override
     public void mouseClicked(double mouseX, double mouseY, int button) {
-        if (button == 0 && isHovering(x, y, width, height, mouseX, mouseY)) {
+        if (isHovering(x, y, width, height, mouseX, mouseY)) {
             dragging = true;
         }
     }

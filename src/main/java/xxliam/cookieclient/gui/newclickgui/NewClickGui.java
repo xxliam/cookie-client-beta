@@ -1,4 +1,4 @@
-package xxliam.cookieclient.gui;
+package xxliam.cookieclient.gui.newclickgui;
 
 import com.mojang.blaze3d.vertex.PoseStack;
 import net.minecraft.client.gui.GuiGraphics;
@@ -6,8 +6,6 @@ import net.minecraft.client.gui.screens.Screen;
 import net.minecraft.network.chat.Component;
 import net.minecraft.util.Mth;
 import xxliam.cookieclient.CookieClient;
-import xxliam.cookieclient.gui.newclickgui.BindElement;
-import xxliam.cookieclient.gui.newclickgui.CategoryPanel;
 import xxliam.cookieclient.modules.Category;
 import xxliam.cookieclient.modules.impl.render.ClickGui;
 import xxliam.cookieclient.modules.impl.render.hud.ModuleList;

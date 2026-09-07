@@ -11,7 +11,7 @@ import xxliam.cookieclient.utils.render.ColorUtil;
 import java.awt.Color;
 
 /**
- * 颜色行（Opal {@code ColorPropertyComponent}）：右侧色块预览；右键展开 HSV 取色面板
+ * 颜色行（Opal {@code ColorPropertyComponent}）：右侧色块预览；左键展开 HSV 取色面板
  * （65×50 拾色器 + 8×50 色相条），按住拖动实时改色。cookie 的 ColorSetting 存 ARGB int，
  * 拖动只改 RGB、保留原 alpha。展开 125ms DECELERATE。
  */
@@ -129,7 +129,7 @@ public class ColorSettingPanel extends PropertyPanel {
 
     @Override
     public void mouseClicked(double mouseX, double mouseY, int button) {
-        if (isHovering(x, y, width, DEFAULT_HEIGHT, mouseX, mouseY) && button == 1) {
+        if (button == 0 && isHovering(x, y, width, DEFAULT_HEIGHT, mouseX, mouseY)) {
             expanded = !expanded;
             return;
         }
