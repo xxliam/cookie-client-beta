@@ -2,6 +2,7 @@ package xxliam.cookieclient.gui.dropdownclickgui.panel.property;
 
 import net.minecraft.client.gui.GuiGraphics;
 import xxliam.cookieclient.gui.dropdownclickgui.Component;
+import xxliam.cookieclient.gui.dropdownclickgui.panel.property.impl.BindPropertyPanel;
 import xxliam.cookieclient.gui.dropdownclickgui.panel.property.impl.BooleanSettingPanel;
 import xxliam.cookieclient.gui.dropdownclickgui.panel.property.impl.ColorSettingPanel;
 import xxliam.cookieclient.gui.dropdownclickgui.panel.property.impl.ModeSettingPanel;
@@ -32,11 +33,14 @@ public class PropertyProvider extends Component {
     private final Module module;
     private final BooleanSupplier expanded;
     private final BooleanSupplier lastModule;
+    /** 展开区底部常驻的绑定行（zen BindElement 等价物），跟随设置行一起渲染 / 分发事件。 */
+    private final PropertyPanel bindPanel;
 
     public PropertyProvider(final Module module, final BooleanSupplier expanded, final BooleanSupplier lastModule) {
         this.module = module;
         this.expanded = expanded;
         this.lastModule = lastModule;
+        this.bindPanel = new BindPropertyPanel(module);
         initProperties();
     }
 
@@ -108,6 +112,14 @@ public class PropertyProvider extends Component {
             currentExtra += panel.getHeight();
         }
 
+        // 绑定行始终垫底（zen 展开区底部 Bind 按钮同规则）
+        bindPanel.setX(x);
+        bindPanel.setY(y + currentExtra);
+        bindPanel.setWidth(width);
+        bindPanel.lastProperty = false;
+        bindPanel.render(guiGraphics, mouseX, mouseY, delta, alpha);
+        currentExtra += bindPanel.getHeight();
+
         this.extraHeight = currentExtra;
     }
 
@@ -129,6 +141,7 @@ public class PropertyProvider extends Component {
         for (PropertyPanel panel : panels) {
             panel.init();
         }
+        bindPanel.init();
     }
 
     @Override
@@ -136,6 +149,7 @@ public class PropertyProvider extends Component {
         for (PropertyPanel panel : panels) {
             panel.close();
         }
+        bindPanel.close();
     }
 
     @Override
@@ -148,6 +162,7 @@ public class PropertyProvider extends Component {
                 panel.mouseClicked(mouseX, mouseY, button);
             }
         }
+        bindPanel.mouseClicked(mouseX, mouseY, button);
     }
 
     @Override
@@ -160,6 +175,7 @@ public class PropertyProvider extends Component {
                 panel.mouseScrolled(mouseX, mouseY, horizontalAmount, verticalAmount);
             }
         }
+        bindPanel.mouseScrolled(mouseX, mouseY, horizontalAmount, verticalAmount);
     }
 
     @Override
@@ -172,6 +188,7 @@ public class PropertyProvider extends Component {
                 panel.mouseReleased(mouseX, mouseY, button);
             }
         }
+        bindPanel.mouseReleased(mouseX, mouseY, button);
     }
 
     @Override

@@ -2,7 +2,6 @@ package xxliam.cookieclient.gui.newclickgui;
 
 import com.mojang.blaze3d.vertex.PoseStack;
 import net.minecraft.client.gui.GuiGraphics;
-import xxliam.cookieclient.gui.NewClickGui;
 import xxliam.cookieclient.modules.Module;
 import xxliam.cookieclient.render.FontStore;
 import xxliam.cookieclient.render.Renderer;

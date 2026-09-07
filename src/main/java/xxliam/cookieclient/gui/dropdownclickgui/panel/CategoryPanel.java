@@ -77,6 +77,11 @@ public class CategoryPanel extends Component {
         modulePanels.forEach(ModulePanel::close);
     }
 
+    /** E 按钮展开：仅结束折叠态（openAnim 反向回 1），保留滚动 / 模块展开状态。 */
+    public void reopen() {
+        closing = false;
+    }
+
     /** Screen 层判定「全部分类收起完成」用。 */
     public boolean isCloseFinished() {
         // 不能依赖 isDone()：render 每帧 animate()+tick() 会重启计时器，progress 回不到 1；
@@ -103,6 +108,13 @@ public class CategoryPanel extends Component {
         float relativeScreenHeight = mc.getWindow().getGuiScaledHeight() - this.y;
         float scissorHeight = Math.min(relativeScreenHeight, totalHeight * openValue);
         float scroll = scrollAnim.getValueF();
+
+        // zen 同款背景 shadow：黑色圆角矩形外扩 12（radius 6+12/2、soft=12、alpha 80）包住面板，
+        // 画在 scissor 之外、面板内容之前；高度用当前可见高度，开关动画时随内容一起伸缩
+        float shadowSize = 12.0f;
+        Renderer.drawRoundedRect(guiGraphics.pose(), x - shadowSize, y - shadowSize,
+                width + shadowSize * 2.0f, Math.max(0.0f, scissorHeight) + shadowSize * 2.0f,
+                6.0f + shadowSize / 2.0f, shadowSize, ColorUtil.fromARGB(0, 0, 0, (int) (80.0f * alpha)));
 
         Renderer.pushScissor(Math.round(x), Math.round(y), Math.round(width), Math.round(Math.max(0.0f, scissorHeight)));
         float a = alpha * openValue;

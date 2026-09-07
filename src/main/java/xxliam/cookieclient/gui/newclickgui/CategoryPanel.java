@@ -5,7 +5,6 @@ import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.GuiGraphics;
 import net.minecraft.util.Mth;
 import xxliam.cookieclient.CookieClient;
-import xxliam.cookieclient.gui.NewClickGui;
 import xxliam.cookieclient.modules.Category;
 import xxliam.cookieclient.modules.Module;
 import xxliam.cookieclient.render.FontStore;

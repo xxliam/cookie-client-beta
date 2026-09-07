@@ -36,7 +36,7 @@ public abstract class PropertyPanel extends Component {
     }
 
     public boolean isHidden() {
-        return !setting.getVisibility().displayable();
+        return setting != null && !setting.getVisibility().displayable();
     }
 
     public Setting<?> getSetting() {

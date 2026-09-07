@@ -16,7 +16,7 @@ import xxliam.cookieclient.utils.render.RenderHelper;
 import xxliam.cookieclient.utils.render.ThemeHelper;
 
 /**
- * 模块行：左键开关 / 右键展开属性 / 中键进入绑定监听（按住 TAB 显示键名）。
+ * 模块行：左键开关 / 右键展开属性（按住 TAB 显示键名）。
  * <p>
  * 移植自 OpenOpal {@code wtf.opal.client.screen.click.dropdown.panel.ModulePanel}，
  * 视觉参数照搬：行底 0xff1e1e2d@70%、启用渐变叠层主题双色（0.4 目标强度，水平渐变）、
@@ -34,7 +34,6 @@ public class ModulePanel extends Component {
 
     private boolean lastModule;
     private boolean expanded;
-    private boolean selectingBind;
 
     public ModulePanel(final Module module) {
         this.module = module;
@@ -51,7 +50,6 @@ public class ModulePanel extends Component {
         hoverAnim = null;
         toggleAnim = null;
         expanded = false;
-        selectingBind = false;
         expandAnim.setCurrentValue(0.0);
     }
 
@@ -92,6 +90,20 @@ public class ModulePanel extends Component {
                     ColorUtil.applyOpacity(theme[1], toggleAnim.getValueF() * alpha), 0.0f);
         }
 
+        // hover 变深（zen 的 hover 高亮在 opal 侧的对应物）：模块行上叠一层半透明黑，
+        // 启用（主题渐变）/ 未启用（深灰底）都压暗，层随 150ms hoverAnim 过渡；
+        // 范围只盖交互行（不含展开的属性行区域），形状跟随末行底部圆角。
+        float hoverAmount = hoverAnim.getValueF();
+        if (hoverAmount > 0.0f) {
+            float headerH = height - (isExpanded() ? propertyProvider.getExtraHeight() : 0.0f);
+            int hoverColor = ColorUtil.applyOpacity(0xFF000000, 0.4f * hoverAmount * alpha);
+            if (!lastModule) {
+                Renderer.drawRect(guiGraphics.pose(), x, y, width, headerH, hoverColor);
+            } else {
+                Renderer.drawRoundedRect(guiGraphics.pose(), x, y, width, headerH, 0.0f, 0.0f, 5.0f, 5.0f, hoverColor);
+            }
+        }
+
         Renderer.pushScissor(Math.round(x), Math.round(y), Math.round(width), Math.round(height));
         final int textColor = module.isEnabled() ? ColorUtil.withAlpha(-1, alpha)
                 : ColorUtil.withAlpha(ColorUtil.darker(-1, 0.2f), alpha);
@@ -99,7 +111,7 @@ public class ModulePanel extends Component {
         // 模块名：NVG baseline y+12.5（字号 8）
         DropdownRender.baseline(guiGraphics, font, module.getName(), x + 6.0f, y + 12.5f, textColor);
 
-        if (propertyProvider.isHasProperties() && !selectingBind && !DropdownClickGui.displayingBinds) {
+        if (propertyProvider.isHasProperties() && !DropdownClickGui.displayingBinds) {
             // 展开箭头：旋转 180×expand（opal materialicons-regular 12，中心旋转）
             final String expandIcon = "\ue5cf";
             final float iconSize = 12.0f;
@@ -113,12 +125,10 @@ public class ModulePanel extends Component {
             RenderHelper.popPose(guiGraphics.pose());
         }
 
-        // 键名（TAB 显示 / 绑定监听中）
+        // 键名（TAB 显示）
         String keyString = null;
-        if (selectingBind) {
-            keyString = "[...]";
-        } else if (DropdownClickGui.displayingBinds && module.getKeyBind() != 0) {
-            keyString = "[" + keyName(module.getKeyBind()) + "]";
+        if (DropdownClickGui.displayingBinds && module.getKeyBind() != 0) {
+            keyString = "[" + DropdownRender.keyName(module.getKeyBind()) + "]";
         }
         if (keyString != null) {
             CustomFont keyFont = FontStore.PRODUCTSANS_MEDIUM_7;
@@ -163,14 +173,6 @@ public class ModulePanel extends Component {
 
     @Override
     public void mouseClicked(double mouseX, double mouseY, int button) {
-        if (selectingBind) {
-            // 绑定监听中：鼠标侧键(3~7)可绑为鼠标键；普通键视为取消监听（避免误写 0=未绑定）
-            if (button >= 3 && button <= 7) {
-                module.setKeyBind(button);
-            }
-            selectingBind = DropdownClickGui.selectingBind = false;
-            return;
-        }
         if (isHovering(x, y, width, height - (isExpanded() ? propertyProvider.getExtraHeight() : 0.0f), mouseX, mouseY)) {
             if (button == 0) {
                 module.toggle();
@@ -178,8 +180,6 @@ public class ModulePanel extends Component {
                 if (propertyProvider.isHasProperties()) {
                     expanded = !expanded;
                 }
-            } else if (button == 2) {
-                selectingBind = DropdownClickGui.selectingBind = true;
             }
         }
         propertyProvider.mouseClicked(mouseX, mouseY, button);
@@ -187,14 +187,6 @@ public class ModulePanel extends Component {
 
     @Override
     public void keyPressed(int keyCode) {
-        if (selectingBind) {
-            // ESC 取消；其余键绑定（0=未绑定语义下键盘码 ≥32 才有意义，但原样存储，BindElement 同样过滤）
-            if (keyCode != 256) {
-                module.setKeyBind(keyCode);
-            }
-            selectingBind = DropdownClickGui.selectingBind = false;
-            return;
-        }
         propertyProvider.keyPressed(keyCode);
     }
 
@@ -238,29 +230,5 @@ public class ModulePanel extends Component {
 
     private static boolean isHovering(float x, float y, float w, float h, double mx, double my) {
         return mx >= x && my >= y && mx < x + w && my < y + h;
-    }
-
-    /** 键码显示名（与 BindElement 的 Mouse4~8 / GLFW 命名同规则，仅取短名）。 */
-    private static String keyName(int key) {
-        if (key >= 3 && key <= 7) {
-            return "Mouse " + (key + 1);
-        }
-        String glfwName = org.lwjgl.glfw.GLFW.glfwGetKeyName(key, 0);
-        if (glfwName != null && !glfwName.isEmpty()) {
-            return glfwName.toUpperCase();
-        }
-        return switch (key) {
-            case 340 -> "L_SHIFT";
-            case 344 -> "R_SHIFT";
-            case 341 -> "L_CTRL";
-            case 345 -> "R_CTRL";
-            case 342 -> "L_ALT";
-            case 346 -> "R_ALT";
-            case 258 -> "TAB";
-            case 257 -> "ENTER";
-            case 259 -> "BACKSPACE";
-            case 256 -> "ESC";
-            default -> "KEY_" + key;
-        };
     }
 }

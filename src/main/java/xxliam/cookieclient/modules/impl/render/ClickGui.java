@@ -4,7 +4,7 @@ import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.screens.Screen;
 import org.lwjgl.glfw.GLFW;
 import xxliam.cookieclient.CookieClient;
-import xxliam.cookieclient.gui.NewClickGui;
+import xxliam.cookieclient.gui.newclickgui.NewClickGui;
 import xxliam.cookieclient.gui.dropdownclickgui.DropdownClickGui;
 import xxliam.cookieclient.modules.Category;
 import xxliam.cookieclient.modules.Module;

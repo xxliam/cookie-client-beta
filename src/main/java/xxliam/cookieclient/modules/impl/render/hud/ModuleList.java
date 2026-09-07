@@ -4,7 +4,8 @@ import com.mojang.blaze3d.vertex.PoseStack;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.GuiGraphics;
 import xxliam.cookieclient.CookieClient;
-import xxliam.cookieclient.gui.NewClickGui;
+import xxliam.cookieclient.gui.dropdownclickgui.DropdownClickGui;
+import xxliam.cookieclient.gui.newclickgui.NewClickGui;
 import xxliam.cookieclient.modules.Category;
 import xxliam.cookieclient.modules.Module;
 import xxliam.cookieclient.render.FontStore;
@@ -186,7 +187,9 @@ public class ModuleList extends Module {
         boolean leftBar = "Left".equals(bar);
 
         // ClickGUI 处于隐藏（折叠）态时进入「布局编辑态」：整列被白色半透明框圈住，可拖动
-        boolean editMode = mc.screen instanceof NewClickGui gui && gui.isHidden();
+        // 两种风格（Zen=NewClickGui / Opal=DropdownClickGui）的 E 按钮折叠态都算
+        boolean editMode = mc.screen instanceof NewClickGui gui && gui.isHidden()
+                || mc.screen instanceof DropdownClickGui drop && drop.isHidden();
 
         // 整列偏移（拖动）→ 等比缩放（原点 = ModuleList 所在侧顶角）。偏移在缩放之外：
         // 先 translate 把整块从默认贴边位置挪开，再以顶角为轴缩放，两者互不影响。
@@ -197,10 +200,6 @@ public class ModuleList extends Module {
         pose.pushPose();
         pose.translate(ox, oy, 0.0f);
         RenderHelper.pushScaleAround(pose, rightSide ? (float) scaledWidth : 0.0f, 0.0f, factor);
-
-        // 行背景包围盒（基坐标，未含缩放/偏移；编辑态边框用）
-        float minXb = Float.MAX_VALUE, maxXb = Float.MIN_VALUE;
-        float minYb = Float.MAX_VALUE, maxYb = Float.MIN_VALUE;
 
         for (int i = 0; i < visibleList.size(); i++) {
             Entry entry = visibleList.get(i);
@@ -231,11 +230,6 @@ public class ModuleList extends Module {
                 barX = leftBar ? 3.5f - vx : 1.5f - vx - w;              // bar 镜像到行内侧/外侧
             }
 
-            minXb = Math.min(minXb, bgLeft);
-            maxXb = Math.max(maxXb, bgLeft + w + 6.5f);
-            minYb = Math.min(minYb, posY);
-            maxYb = Math.max(maxYb, posY + OFFSET);
-
             // 行背景（直角矩形，opal rect(posX-6.5F, posY, width+6.5F, OFFSET, 0x80090909)）；
             // alpha 由 Background opacity 滑块(0-255)控制，默认 128 = opal 原版 0x80
             // 边缘晕开：drawShadow tint 用与背景同色同 alpha，高斯纹理 alpha 中心→边缘天然衰减，
@@ -260,13 +254,23 @@ public class ModuleList extends Module {
                     textX, posY + 2.5f, rowColor);
         }
 
-        // ClickGUI 隐藏态的编辑框：白色 80% 边框，宽=顶部长度（最宽行的全长）、高=贴屏边缘那列的高度。
-        // 画在行之上（外圈描边），与行同一变换空间，自动跟随 Scale 与拖动偏移。
-        if (editMode && visibleList.size() > 0 && minXb <= maxXb && minYb <= maxYb) {
-            drawEditFrame(guiGraphics.pose(), minXb, minYb, maxXb - minXb, maxYb - minYb);
-        }
         RenderHelper.popPose(pose);
         pose.popPose();
+
+        // ClickGUI 隐藏态的编辑框：白色 80% 边框，宽=顶部长度（最宽行的全长）、高=贴屏边缘那列的高度。
+        // 画在屏幕空间（getFrameExtents 已含 Scale + 拖动偏移，与 isFrameHit 命中同源），坐标取整：
+        // 变换空间内的小数坐标会让四条边落在不同亚像素相位，光栅化后横竖边粗细不一；
+        // 整数对齐后四条边完全同粗（1 GUI 单位 × guiScale 物理像素）。
+        if (editMode && visibleList.size() > 0) {
+            float[] e = getFrameExtents();
+            if (e != null) {
+                float fx0 = (float) Math.round(e[0]);
+                float fy0 = (float) Math.round(e[1]);
+                float fx1 = (float) Math.round(e[2]);
+                float fy1 = (float) Math.round(e[3]);
+                drawEditFrame(guiGraphics.pose(), fx0, fy0, fx1 - fx0, fy1 - fy0);
+            }
+        }
     }
 
     /** 布局编辑态边框：白色不透明度 80%（0xCCFFFFFF）的 1px 四边描边。 */

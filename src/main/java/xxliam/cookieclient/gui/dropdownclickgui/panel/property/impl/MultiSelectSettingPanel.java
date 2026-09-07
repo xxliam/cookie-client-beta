@@ -87,9 +87,6 @@ public class MultiSelectSettingPanel extends PropertyPanel {
 
     @Override
     public void mouseClicked(double mouseX, double mouseY, int button) {
-        if (button != 0) {
-            return;
-        }
         CustomFont font = FontStore.PRODUCTSANS_MEDIUM_6;
         float addedHeight = 0.0f;
         float currentLineLength = 2.0f;

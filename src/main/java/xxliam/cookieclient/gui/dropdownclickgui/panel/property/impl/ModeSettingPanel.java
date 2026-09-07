@@ -16,7 +16,7 @@ import xxliam.cookieclient.utils.render.ColorUtil;
 import xxliam.cookieclient.utils.render.RenderHelper;
 
 /**
- * 模式下拉行（Opal {@code ModePropertyComponent}）：名称行 + 下拉选项框（右键展开，
+ * 模式下拉行（Opal {@code ModePropertyComponent}）：名称行 + 下拉选项框（左键展开，
  * 125ms DECELERATE 动画），展开后 13px/行列出其余档位；选项若是 Theme 模块的主题档，
  * 跟随显示该主题主副色 swatch（opal isTheme 分支，视觉照搬）。
  */
@@ -125,7 +125,7 @@ public class ModeSettingPanel extends PropertyPanel {
 
     @Override
     public void mouseClicked(double mouseX, double mouseY, int button) {
-        if (isHovering(x, y, width, 32.0f, mouseX, mouseY) && button == 1) {
+        if (isHovering(x, y, width, 32.0f, mouseX, mouseY) && button == 0) {
             expanded = !expanded;
             return;
         }

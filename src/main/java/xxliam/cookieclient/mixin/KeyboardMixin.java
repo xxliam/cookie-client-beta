@@ -9,7 +9,7 @@ import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Inject;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 import xxliam.cookieclient.CookieClient;
-import xxliam.cookieclient.gui.NewClickGui;
+import xxliam.cookieclient.gui.newclickgui.NewClickGui;
 import xxliam.cookieclient.gui.dropdownclickgui.DropdownClickGui;
 import xxliam.cookieclient.modules.impl.render.ClickGui;
 

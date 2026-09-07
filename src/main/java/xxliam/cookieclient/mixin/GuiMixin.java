@@ -7,6 +7,7 @@ import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Inject;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 import xxliam.cookieclient.CookieClient;
+import xxliam.cookieclient.gui.dropdownclickgui.DropdownClickGui;
 import xxliam.cookieclient.modules.Module;
 import xxliam.cookieclient.render.Renderer;
 
@@ -26,5 +27,7 @@ public class GuiMixin {
                 module.render(guiGraphics, partialTick);
             }
         }
+        // Opal ClickGUI 关闭收拢动画：Screen 已卸载（游戏输入已恢复），动画在 HUD 层播完
+        DropdownClickGui.renderClosingOverlay(guiGraphics, partialTick);
     }
 }
