@@ -4,7 +4,6 @@ import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.GuiGraphics;
 import xxliam.cookieclient.CookieClient;
 import xxliam.cookieclient.gui.dropdownclickgui.Component;
-import xxliam.cookieclient.gui.dropdownclickgui.DropdownClickGui;
 import xxliam.cookieclient.gui.dropdownclickgui.DropdownRender;
 import xxliam.cookieclient.modules.Category;
 import xxliam.cookieclient.render.FontStore;
@@ -78,11 +77,6 @@ public class CategoryPanel extends Component {
         modulePanels.forEach(ModulePanel::close);
     }
 
-    /** E 按钮展开：仅结束折叠态（openAnim 反向回 1），保留滚动 / 模块展开状态。 */
-    public void reopen() {
-        closing = false;
-    }
-
     /** Screen 层判定「全部分类收起完成」用。 */
     public boolean isCloseFinished() {
         // 不能依赖 isDone()：render 每帧 animate()+tick() 会重启计时器，progress 回不到 1；
@@ -110,49 +104,19 @@ public class CategoryPanel extends Component {
         float scissorHeight = Math.min(relativeScreenHeight, totalHeight * openValue);
         float scroll = scrollAnim.getValueF();
 
-        // zen 同款背景 shadow：黑色圆角矩形外扩 12（radius 6+12/2、soft=12、alpha 80）包住面板，
-        // 画在 scissor 之外、面板内容之前；高度用当前可见高度，开关动画时随内容一起伸缩
-        float shadowSize = 12.0f;
-        Renderer.drawRoundedRect(guiGraphics.pose(), x - shadowSize, y - shadowSize,
-                width + shadowSize * 2.0f, Math.max(0.0f, scissorHeight) + shadowSize * 2.0f,
-                6.0f + shadowSize / 2.0f, shadowSize, ColorUtil.fromARGB(0, 0, 0, (int) (80.0f * alpha)));
-
-        DropdownClickGui.pushScaledScissor(x, y, width, Math.max(0.0f, scissorHeight));
+        Renderer.pushScissor(Math.round(x), Math.round(y), Math.round(width), Math.round(Math.max(0.0f, scissorHeight)));
         float a = alpha * openValue;
 
-        // header：固有图层——固定在分类条原始位置，不随列表滚动（zen 同款：下层模块
-        // 划到它下方/背后时顶部纹丝不动）。旧实现把 scroll 一并传给 header，滚动时整条
-        // 顶栏跟着内容上滑，此乃 opal 行为，需按 zen 修正。
-        drawHeader(guiGraphics, a);
+        // header：底部两角 0（opal roundedRectVarying 5,5,0,0），后屏模糊层 + 85% 深灰
+        drawHeader(guiGraphics, a, scroll);
 
-        // 模块列表：内层裁剪自 header 底边开始。列表上滚的内容只能隐藏在 header 之下被
-        // 裁掉，既不覆盖 header 也不带动 header（等价 zen newclickgui CategoryPanel 把
-        // 模块区 scissor 起点放在 posY+20 的裁剪策略）。开合动画初期（scissorHeight 尚
-        // 不足一个 header 高）无可见列表，跳过绘制。
-        float contentClipHeight = scissorHeight - HEADER_HEIGHT;
-        if (contentClipHeight > 0.0f) {
-            float clipTop = y + HEADER_HEIGHT;
-            float clipBottom = clipTop + contentClipHeight;
-            DropdownClickGui.pushScaledScissor(x, y + HEADER_HEIGHT, width, contentClipHeight);
-            for (int i = 0; i < modulePanels.size(); i++) {
-                ModulePanel panel = modulePanels.get(i);
-                float panelHeight = HEADER_HEIGHT + panel.getExpandAnimation().getValueF() * panel.getAddedHeight();
-                float panelTop = currentY + scroll;
-                // 整行滚出可见内容区（header 上沿之上 / 屏幕下缘之下）：直接跳过。
-                // 若照常渲染，ModulePanel 内部对行自身再 pushScissor 时会与父级内容
-                // scissor 交集为空 → Renderer 走 disableScissor 分支，该行反而不受裁剪、
-                // 穿到 header 上方仍可见（opal 缺陷）。zen 无此行级 scissor，行只会在
-                // header 下方被裁，永不越界；此处跳过相交为空的行等价复刻 zen 观感。
-                if (panelBottomClipped(panelTop, panelHeight, clipTop, clipBottom)) {
-                    currentY += panelHeight;
-                    continue;
-                }
-                panel.setDimensions(x, panelTop, width, panelHeight);
-                panel.setLastModule(i == modulePanels.size() - 1);
-                panel.render(guiGraphics, mouseX, mouseY, delta, a);
-                currentY += panelHeight;
-            }
-            Renderer.popScissor();
+        for (int i = 0; i < modulePanels.size(); i++) {
+            ModulePanel panel = modulePanels.get(i);
+            float panelHeight = HEADER_HEIGHT + panel.getExpandAnimation().getValueF() * panel.getAddedHeight();
+            panel.setDimensions(x, currentY + scroll, width, panelHeight);
+            panel.setLastModule(i == modulePanels.size() - 1);
+            panel.render(guiGraphics, mouseX, mouseY, delta, a);
+            currentY += panelHeight;
         }
         Renderer.popScissor();
 
@@ -162,23 +126,15 @@ public class CategoryPanel extends Component {
         scrollAnim.tick();
     }
 
-    /**
-     * 模块行与可见内容区（header 下缘 ~ 裁剪底）是否完全不相交（整行滚出可视范围）。
-     * 此时行绘制会因行级 scissor 与父级交集为空而失去裁剪，必须整行跳过。
-     */
-    private static boolean panelBottomClipped(float panelTop, float panelHeight, float clipTop, float clipBottom) {
-        float panelBottom = panelTop + panelHeight;
-        return panelBottom <= clipTop || panelTop >= clipBottom;
-    }
-
-    private void drawHeader(GuiGraphics g, float a) {        // blur 层（opal BLUR_PAINT）：drawScreenBlur 每帧帧缓冲捕获一次，画当前区域的毛玻璃
-        Renderer.drawScreenBlur(g.pose(), x, y, width, HEADER_HEIGHT, 5.0f, 2.5f);
-        Renderer.drawRoundedRect(g.pose(), x, y, width, HEADER_HEIGHT,
+    private void drawHeader(GuiGraphics g, float a, float scroll) {
+        // blur 层（opal BLUR_PAINT）：drawScreenBlur 每帧帧缓冲捕获一次，画当前区域的毛玻璃
+        Renderer.drawScreenBlur(g.pose(), x, y + scroll, width, HEADER_HEIGHT, 5.0f, 2.5f);
+        Renderer.drawRoundedRect(g.pose(), x, y + scroll, width, HEADER_HEIGHT,
                 5.0f, 5.0f, 0.0f, 0.0f, ColorUtil.applyOpacity(0xFF0F0F0F, 0.85f * a));
         DropdownRender.baseline(g, FontStore.PRODUCTSANS_BOLD_9, category.getDisplayName(),
-                x + 5.0f, y + 13.0f, ColorUtil.withAlpha(-1, a));
+                x + 5.0f, y + scroll + 13.0f, ColorUtil.withAlpha(-1, a));
         DropdownRender.baseline(g, FontStore.MATERIALICONS_10, icon(category),
-                x + width - 15.5f, y + 15.0f, ColorUtil.withAlpha(-1, a));
+                x + width - 15.5f, y + scroll + 15.0f, ColorUtil.withAlpha(-1, a));
     }
 
     /** cookie Category → materialicons 图标码点（opal 分类带 icon，本地补映射）。 */
