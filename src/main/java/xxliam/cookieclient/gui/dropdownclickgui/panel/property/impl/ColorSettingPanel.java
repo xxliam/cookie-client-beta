@@ -1,6 +1,7 @@
 package xxliam.cookieclient.gui.dropdownclickgui.panel.property.impl;
 
 import net.minecraft.client.gui.GuiGraphics;
+import xxliam.cookieclient.gui.dropdownclickgui.DropdownClickGui;
 import xxliam.cookieclient.gui.dropdownclickgui.panel.property.PropertyPanel;
 import xxliam.cookieclient.render.Renderer;
 import xxliam.cookieclient.settings.impl.ColorSetting;
@@ -84,7 +85,7 @@ public class ColorSettingPanel extends PropertyPanel {
         hue = hueSatBright[0];
 
         int rgba = (current & 0x00FFFFFF) | 0xFF000000;
-        Renderer.pushScissor(Math.round(x), Math.round(y), Math.round(width), Math.round(height));
+        DropdownClickGui.pushScaledScissor(x, y, width, height);
 
         // 拾色器底：纯色相 + 白(左→右消失) + 黑(上→下加深)
         Renderer.drawRect(guiGraphics.pose(), xPos, yPos, PICKER_W, PICKER_H,

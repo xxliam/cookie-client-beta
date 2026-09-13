@@ -7,12 +7,14 @@ import net.minecraft.network.chat.Component;
 import xxliam.cookieclient.CookieClient;
 import xxliam.cookieclient.gui.dropdownclickgui.panel.CategoryPanel;
 import xxliam.cookieclient.gui.dropdownclickgui.panel.property.impl.BindPropertyPanel;
+import xxliam.cookieclient.hud.DynamicIsland;
 import xxliam.cookieclient.modules.Category;
 import xxliam.cookieclient.modules.impl.render.ClickGui;
 import xxliam.cookieclient.modules.impl.render.hud.ModuleList;
 import xxliam.cookieclient.render.FontStore;
 import xxliam.cookieclient.render.Renderer;
 import xxliam.cookieclient.utils.render.ColorUtil;
+import xxliam.cookieclient.utils.render.RenderHelper;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -59,9 +61,67 @@ public class DropdownClickGui extends Screen {
     private float moduleDragBaseOffsetX;
     private float moduleDragBaseOffsetY;
 
+    // ---- 灵动岛布局编辑（仅 hidden 折叠态）：按住岛包围框沿屏幕中轴线上下拖动 ----
+    private boolean islandDragActive;
+    private float islandDragStartY;
+    private float islandDragBaseOffsetY;
+
     /** 关闭覆盖层：Screen 卸载后继续播放收拢动画的面板（静态，与 Screen 生命周期解耦）。 */
     private static List<CategoryPanel> closingPanels;
     private static boolean closingOverlayActive;
+
+    // ---- 整体缩放（与 zen 同构：百分制滑条 / 100；opal 基准 100%、zen 基准 80%） ----
+    // 面板在 Pose 缩放下渲染，但其 scissor 用屏幕坐标（不受 Pose 影响），故把当前帧的
+    // 缩放系数与锚点暴露成静态量，供各面板用 toScaledX/toScaledY 换算。
+    private static float frameScale = 1.0f;
+    private static float frameAnchorX = 0.0f;
+    private static float frameAnchorY = CATEGORY_Y;
+
+    /** 当前帧的整体缩放系数（面板换算 scissor 用）。 */
+    public static float scale() {
+        return frameScale;
+    }
+
+    /** 面板局部 x → 缩放后屏幕 x（scissor 等不受 Pose 影响的绘制需要）。 */
+    public static float toScaledX(float localX) {
+        return frameAnchorX + (localX - frameAnchorX) * frameScale;
+    }
+
+    /** 面板局部 y → 缩放后屏幕 y。 */
+    public static float toScaledY(float localY) {
+        return frameAnchorY + (localY - frameAnchorY) * frameScale;
+    }
+
+    /** 屏幕 x → 未缩放空间 x（鼠标命中反算）。 */
+    public static float toLocalX(double screenX) {
+        return (float) ((screenX - frameAnchorX) / frameScale + frameAnchorX);
+    }
+
+    /** 屏幕 y → 未缩放空间 y（鼠标命中反算）。 */
+    public static float toLocalY(double screenY) {
+        return (float) ((screenY - frameAnchorY) / frameScale + frameAnchorY);
+    }
+
+    /** 记录当前帧的缩放参数（render / 关闭覆盖层在绘制面板前调用）。 */
+    private static void updateFrameScale(float anchorX) {
+        frameScale = ClickGui.getGuiScaleFactor();
+        frameAnchorX = anchorX;
+        frameAnchorY = CATEGORY_Y;
+    }
+
+    /**
+     * 按整体缩放换算后推入 scissor（面板局部矩形 → 缩放后屏幕坐标）。
+     * <p>
+     * scissor 是屏幕坐标、不受 Pose 矩阵影响，所以面板内在缩放下渲染时必须走这里，
+     * 否则裁剪区会与绘制位置错位。
+     */
+    public static void pushScaledScissor(float localX, float localY, float localW, float localH) {
+        Renderer.pushScissor(
+                Math.round(toScaledX(localX)),
+                Math.round(toScaledY(localY)),
+                Math.round(localW * frameScale),
+                Math.round(localH * frameScale));
+    }
 
     public DropdownClickGui() {
         super(Component.literal("Cookie Client Dropdown ClickGUI"));
@@ -79,13 +139,18 @@ public class DropdownClickGui extends Screen {
 
     @Override
     public void render(GuiGraphics guiGraphics, int mouseX, int mouseY, float delta) {
-        Minecraft mc = Minecraft.getInstance();
         displayingBinds = isKeyDown(org.lwjgl.glfw.GLFW.GLFW_KEY_TAB);
         boolean allowDrag = ClickGui.isAllowDrag();
 
+        // 整体缩放：水平以屏幕中心为轴、垂直以分类条所在行 CATEGORY_Y 为轴（与 zen 同构）
+        updateFrameScale(this.width / 2.0f);
+        int localMouseX = Math.round(toLocalX(mouseX));
+        int localMouseY = Math.round(toLocalY(mouseY));
+
         final int categoryAmount = categoryPanels.size();
         final float totalWidth = categoryAmount * CATEGORY_WIDTH + (categoryAmount - 1) * CATEGORY_SPACING;
-        final float startX = (mc.getWindow().getGuiScaledWidth() - totalWidth) / 2.0f;
+        final float startX = (this.width - totalWidth) / 2.0f;
+        RenderHelper.pushScaleAround(guiGraphics.pose(), frameAnchorX, frameAnchorY, frameScale);
         for (int i = 0; i < categoryAmount; i++) {
             CategoryPanel panel = categoryPanels.get(i);
             final float x = startX + i * (CATEGORY_WIDTH + CATEGORY_SPACING);
@@ -94,8 +159,10 @@ public class DropdownClickGui extends Screen {
             // opal 同款：每帧把含拖动偏移的最终坐标 + 分类条尺寸写回面板（width/height 参与命中与绘制）
             panel.setDimensions(x + panel.getDragOffsetX(), CATEGORY_Y + panel.getDragOffsetY(),
                     CATEGORY_WIDTH, CATEGORY_HEIGHT);
-            panel.render(guiGraphics, mouseX, mouseY, delta, 1.0f);
+            panel.render(guiGraphics, localMouseX, localMouseY, delta, 1.0f);
         }
+        RenderHelper.popPose(guiGraphics.pose());
+        // 右下角 E 按钮：屏幕坐标、不参与整体缩放（与 zen 一致）
         renderToggleButton(guiGraphics, mouseX, mouseY);
     }
 
@@ -109,8 +176,8 @@ public class DropdownClickGui extends Screen {
             return true;
         }
         if (hidden) {
-            // 折叠态：左键点在 ModuleList 包围框上开始拖动；其余点击一律吞掉
-            if (button == 0 && tryStartModuleDrag(mouseX, mouseY)) {
+            // 折叠态：左键点在各元素包围框上开始拖动；其余点击一律吞掉
+            if (button == 0 && (tryStartModuleDrag(mouseX, mouseY) || tryStartIslandDrag(mouseX, mouseY))) {
                 return true;
             }
             return true; // 面板已折叠：除按钮外不响应任何点击
@@ -122,20 +189,26 @@ public class DropdownClickGui extends Screen {
         }
         boolean allowDrag = ClickGui.isAllowDrag();
         categoryPanels.forEach(panel -> panel.setDraggingAllowed(allowDrag));
-        categoryPanels.forEach(panel -> panel.mouseClicked(mouseX, mouseY, button));
+        // 面板在缩放空间内命中：先把光标反算回未缩放坐标
+        float localX = toLocalX(mouseX);
+        float localY = toLocalY(mouseY);
+        categoryPanels.forEach(panel -> panel.mouseClicked(localX, localY, button));
         return true;
     }
 
     @Override
     public boolean mouseReleased(double mouseX, double mouseY, int button) {
-        if (moduleDragActive) {
+        if (moduleDragActive || islandDragActive) {
             moduleDragActive = false;
+            islandDragActive = false;
             return true;
         }
         if (hidden) {
             return false;
         }
-        categoryPanels.forEach(panel -> panel.mouseReleased(mouseX, mouseY, button));
+        float localX = toLocalX(mouseX);
+        float localY = toLocalY(mouseY);
+        categoryPanels.forEach(panel -> panel.mouseReleased(localX, localY, button));
         return true;
     }
 
@@ -149,6 +222,12 @@ public class DropdownClickGui extends Screen {
                 nx = moduleDragBaseOffsetX;
             }
             ModuleList.INSTANCE.setDraggedOffset(nx, ny);
+            return true;
+        }
+        // 灵动岛布局拖动：只取 Y（水平恒居中于屏幕中轴线），钳制在屏幕内
+        if (islandDragActive && DynamicIsland.INSTANCE != null) {
+            float ny = islandDragBaseOffsetY + (float) (mouseY - islandDragStartY);
+            DynamicIsland.INSTANCE.setDraggedOffsetY(ny);
             return true;
         }
         return super.mouseDragged(mouseX, mouseY, button, dragX, dragY);
@@ -167,10 +246,22 @@ public class DropdownClickGui extends Screen {
         return true;
     }
 
-    /** 点击 E 按钮：翻转折叠态并中止可能存在的绑定监听 / ModuleList 拖动（zen 同款）。 */
+    /** 命中灵动岛包围框则进入拖动态（记录抓取基准；只走 Y = 沿屏幕中轴线上下）。 */
+    private boolean tryStartIslandDrag(double mouseX, double mouseY) {
+        if (DynamicIsland.INSTANCE == null || !DynamicIsland.INSTANCE.isFrameHit(mouseX, mouseY)) {
+            return false;
+        }
+        islandDragActive = true;
+        islandDragStartY = (float) mouseY;
+        islandDragBaseOffsetY = DynamicIsland.INSTANCE.getOffsetY();
+        return true;
+    }
+
+    /** 点击 E 按钮：翻转折叠态并中止可能存在的绑定监听 / ModuleList 拖动 / 灵动岛拖动（zen 同款）。 */
     private void toggleHidden() {
         hidden = !hidden;
         moduleDragActive = false;
+        islandDragActive = false;
         BindPropertyPanel.clearListening();
         if (hidden) {
             categoryPanels.forEach(CategoryPanel::close);
@@ -189,7 +280,9 @@ public class DropdownClickGui extends Screen {
         if (hidden) {
             return false;
         }
-        categoryPanels.forEach(panel -> panel.mouseScrolled(mouseX, mouseY, 0.0, delta));
+        float localX = toLocalX(mouseX);
+        float localY = toLocalY(mouseY);
+        categoryPanels.forEach(panel -> panel.mouseScrolled(localX, localY, 0.0, delta));
         return true;
     }
 
@@ -265,19 +358,26 @@ public class DropdownClickGui extends Screen {
         }
         final int categoryAmount = closingPanels.size();
         final float totalWidth = categoryAmount * CATEGORY_WIDTH + (categoryAmount - 1) * CATEGORY_SPACING;
-        final float startX = (mc.getWindow().getGuiScaledWidth() - totalWidth) / 2.0f;
+        final float screenWidth = mc.getWindow().getGuiScaledWidth();
+        final float startX = (screenWidth - totalWidth) / 2.0f;
+        // 与 Screen.render 同一套整体缩放（覆盖层同样属于 GUI，需保持缩放与命中一致）
+        updateFrameScale(screenWidth / 2.0f);
+        int localMouseX = Math.round(toLocalX(mouseX));
+        int localMouseY = Math.round(toLocalY(mouseY));
         boolean allFinished = true;
+        RenderHelper.pushScaleAround(guiGraphics.pose(), frameAnchorX, frameAnchorY, frameScale);
         for (int i = 0; i < categoryAmount; i++) {
             CategoryPanel panel = closingPanels.get(i);
             final float x = startX + i * (CATEGORY_WIDTH + CATEGORY_SPACING);
             panel.setBasePosition(x, CATEGORY_Y);
             panel.setDraggingAllowed(false);
             panel.setDimensions(x, CATEGORY_Y, CATEGORY_WIDTH, CATEGORY_HEIGHT);
-            panel.render(guiGraphics, mouseX, mouseY, partialTick, 1.0f);
+            panel.render(guiGraphics, localMouseX, localMouseY, partialTick, 1.0f);
             if (!panel.isCloseFinished()) {
                 allFinished = false;
             }
         }
+        RenderHelper.popPose(guiGraphics.pose());
         if (allFinished) {
             CookieClient.LOGGER.info("[DropdownClickGui] close overlay finished");
             closingOverlayActive = false;

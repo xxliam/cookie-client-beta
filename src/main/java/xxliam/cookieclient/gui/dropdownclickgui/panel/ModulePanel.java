@@ -104,7 +104,7 @@ public class ModulePanel extends Component {
             }
         }
 
-        Renderer.pushScissor(Math.round(x), Math.round(y), Math.round(width), Math.round(height));
+        DropdownClickGui.pushScaledScissor(x, y, width, height);
         final int textColor = module.isEnabled() ? ColorUtil.withAlpha(-1, alpha)
                 : ColorUtil.withAlpha(ColorUtil.darker(-1, 0.2f), alpha);
 

@@ -9,7 +9,7 @@
 [![Fabric API](https://img.shields.io/badge/Fabric%20API-0.92.11%2B1.20.1-bf616a?style=flat-square)](https://modrinth.com/mod/fabric-api)
 [![Java](https://img.shields.io/badge/Java-17%2B-007396?style=flat-square)](https://adoptium.net)
 [![Version](https://img.shields.io/badge/Version-beta1.0-9a4dff?style=flat-square)](./gradle.properties)
-[![License](https://img.shields.io/badge/License-CC0--1.0-6c757d?style=flat-square)](./LICENSE)
+[![License](https://img.shields.io/badge/License-CC--BY--NC--SA--4.0-d93f3b?style=flat-square)](./LICENSE)
 
 [English](README.md) · **简体中文**
 
@@ -133,7 +133,7 @@
 | 构建工具 | Gradle `9.5.1`（wrapper）+ Fabric Loom `1.17-SNAPSHOT` |
 | 映射 | Mojang 官方映射（Mojmap） |
 | 版本 | `beta1.0` |
-| 许可证 | CC0-1.0 |
+| 许可证 | CC BY-NC-SA 4.0（禁止商用） |
 
 ---
 
@@ -295,7 +295,9 @@ public class MyModule extends Module {
 
 ## 📄 许可证
 
-本项目基于 [CC0-1.0](./LICENSE) 许可证发布（公共领域贡献）。
+本项目基于 [CC BY-NC-SA 4.0](./LICENSE) 许可证发布 —— **需署名、禁止商用、衍生作品须以相同协议共享**。本客户端及其内容**不允许任何形式的商业使用**。
+
+第三方组件沿用其自身协议：移植自 [OAuth Account Manager](https://github.com/MC-U-Team/OAuth-Account-Manager) 的代码为 Apache-2.0（© HyCraftHD / Team UTeam）；MomoSignature 字体为 SIL OFL 1.1。
 
 ---
 

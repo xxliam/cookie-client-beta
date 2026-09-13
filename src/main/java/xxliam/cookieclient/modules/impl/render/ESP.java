@@ -14,13 +14,17 @@ import xxliam.cookieclient.modules.Category;
 import xxliam.cookieclient.modules.Module;
 import xxliam.cookieclient.modules.impl.render.esp.OpalEspRenderer;
 import xxliam.cookieclient.settings.impl.BooleanSetting;
+import xxliam.cookieclient.settings.impl.ColorSetting;
 import xxliam.cookieclient.settings.impl.ModeSetting;
 import xxliam.cookieclient.settings.impl.MultiSelectSetting;
 
 /**
  * ESP：实体透视。两个模式：
  * <ul>
- *   <li>{@code Glow}：实体发光（由 {@code MinecraftMixin} 调用 {@link #isGlowing}）；</li>
+ *   <li>{@code Glow}：实体发光——走原版 glow 轮廓通道（形状贴合实体本体），由
+ *       {@code MinecraftMixin} 调用 {@link #isGlowing}；轮廓色可自定义
+ *       （{@code Theme} 主题主色 / {@code Custom} 自选色 / {@code White} 白），
+ *       由 {@code EntityGlowColorMixin} 覆盖 {@code Entity.getTeamColor()} 实现；</li>
  *   <li>{@code Opal}：完整移植 OpenOpal {@code ESPModule} —— 2D 外框(可选黑描边)、
  *       左缘血条、名牌(Name/Health/Distance/Equipment+附魔)与状态指示器，
  *       渲染与目标过滤语义全部照搬 opal（见 {@link OpalEspRenderer}）。</li>
@@ -38,6 +42,13 @@ public class ESP extends Module {
     private final BooleanSetting animalsSetting = new BooleanSetting("Animals", false);
     private final BooleanSetting itemsSetting = new BooleanSetting("Items", false);
     private final BooleanSetting arrowsSetting = new BooleanSetting("Arrows", true);
+
+    /** Glow 轮廓色来源：Theme 主题主色 / Custom 自选 / White 白（White 对齐原版默认观感）。 */
+    private final ModeSetting glowColorMode = new ModeSetting("Glow Color", "Theme", "Custom", "White")
+            .withDefault("White").withVisibility(this::glowModeView);
+    /** Custom 档的自选轮廓色（ARGB）。 */
+    private final ColorSetting glowColor = new ColorSetting("Custom Glow Color", 0xFF2DBFFE,
+            () -> glowModeView() && glowColorMode.is("Custom"));
 
     // ---- Opal 模式设置（照搬 opal ESPSettings；仅 Opal 档位可见） ----
     private final BooleanSetting opalBox = new BooleanSetting("Opal Box", true, this::opalModeView);
@@ -67,7 +78,7 @@ public class ESP extends Module {
     public ESP() {
         super("ESP", Category.RENDER);
         INSTANCE = this;
-        // Glow 目标设置在 Opal 档位下隐藏
+        // Glow 目标过滤设置在 Opal 档位下隐藏
         playersSetting.setVisibility(this::glowModeView);
         mobsSetting.setVisibility(this::glowModeView);
         animalsSetting.setVisibility(this::glowModeView);
@@ -79,6 +90,8 @@ public class ESP extends Module {
         addSetting(animalsSetting);
         addSetting(itemsSetting);
         addSetting(arrowsSetting);
+        addSetting(glowColorMode);
+        addSetting(glowColor);
         addSetting(opalBox);
         addSetting(opalBoxStroke);
         addSetting(opalHealthBar);
@@ -100,7 +113,12 @@ public class ESP extends Module {
 
     /** 是否处于 Glow 档位。 */
     private boolean glowModeView() {
-        return !opalModeView();
+        return "Glow".equalsIgnoreCase(modeSetting.getValue());
+    }
+
+    /** 模块开启且处于 Glow 档位。 */
+    public boolean isGlowModeActive() {
+        return isEnabled() && glowModeView();
     }
 
     /** 模块开启且处于 Opal 档位。 */
@@ -108,16 +126,49 @@ public class ESP extends Module {
         return isEnabled() && opalModeView();
     }
 
-    /** Glow 模式：判断实体是否应发光（由 MinecraftMixin 调用）。 */
+    /** Glow 档位的目标过滤（player / animal / mob / item / arrow）。 */
+    public boolean matchesGlowTarget(Entity entity) {
+        if (entity instanceof Player && playersSetting.getValue()) return true;
+        if (entity instanceof Animal && animalsSetting.getValue()) return true;
+        if (entity instanceof Mob && mobsSetting.getValue()) return true;
+        if (entity instanceof ItemEntity && itemsSetting.getValue()) return true;
+        return entity instanceof Arrow && arrowsSetting.getValue();
+    }
+
+    /**
+     * Glow 档：是否应让实体进入原版 glow 轮廓通道（形状贴合实体本体）。
+     * 该判定由 {@code MinecraftMixin.shouldEntityAppearGlowing} 调用。
+     */
     public boolean isGlowing(Entity entity) {
-        if (isEnabled() && "Glow".equalsIgnoreCase(modeSetting.getValue())) {
-            if (entity instanceof Player && playersSetting.getValue()) return true;
-            if (entity instanceof Animal && animalsSetting.getValue()) return true;
-            if (entity instanceof Mob && mobsSetting.getValue()) return true;
-            if (entity instanceof ItemEntity && itemsSetting.getValue()) return true;
-            return entity instanceof Arrow && arrowsSetting.getValue();
+        return isGlowModeActive() && matchesGlowTarget(entity);
+    }
+
+    /**
+     * Glow 档的自定义轮廓色（{@code Entity.getTeamColor()} 覆盖值）。
+     * <p>
+     * vanilla 消费端（{@code LevelRenderer.renderLevel}）用 {@code FastColor.ARGB32.red/green/blue}
+     * 拆包并以 alpha=255 上色，因此这里直接返回 ARGB。仅 Glow 档启用且命中目标时返回自定义色；
+     * 其余情况返回 {@code null} 放行原版队伍色（无队伍默认 -1 = 白），不影响 Opal。
+     * 供 {@code EntityGlowColorMixin} 调用。
+     */
+    public Integer glowColorOverride(Entity entity) {
+        if (!isGlowModeActive() || !matchesGlowTarget(entity)) {
+            return null;
         }
-        return false;
+        if (glowColorMode.is("White")) {
+            return 0xFFFFFFFF;
+        }
+        if (glowColorMode.is("Custom")) {
+            return glowColor.getColor();
+        }
+        // Theme：取主题主色（CUSTOM/RAINBOW/预设都在 getColors() 里解析）
+        if (Theme.INSTANCE != null) {
+            int[] colors = Theme.INSTANCE.getColors();
+            if (colors != null && colors.length > 0) {
+                return colors[0];
+            }
+        }
+        return null;
     }
 
     // ---------------------------------------------------------------
@@ -186,9 +237,11 @@ public class ESP extends Module {
 
     @Override
     public void render(GuiGraphics guiGraphics, float partialTicks) {
+        // Glow 档不需要 HUD 渲染：形状走原版 glow 轮廓通道
+        // （shouldEntityAppearGlowing → LevelRenderer silhouette + outline pass），
+        // 颜色由 EntityGlowColorMixin 覆盖 getTeamColor 定制。
         if (isOpalModeActive()) {
             OpalEspRenderer.render(guiGraphics, partialTicks, this);
         }
-        // Glow 档不需要 HUD 渲染：发光由 MinecraftMixin（shouldEntityAppearGlowing → isGlowing）驱动
     }
 }

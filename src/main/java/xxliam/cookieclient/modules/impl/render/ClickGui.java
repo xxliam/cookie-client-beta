@@ -10,6 +10,7 @@ import xxliam.cookieclient.modules.Category;
 import xxliam.cookieclient.modules.Module;
 import xxliam.cookieclient.settings.impl.BooleanSetting;
 import xxliam.cookieclient.settings.impl.ModeSetting;
+import xxliam.cookieclient.settings.impl.NumberSetting;
 
 /**
  * ClickGUI 总开关：绑定键（默认右 Shift）打开 / 关闭设置界面。
@@ -29,19 +30,41 @@ public class ClickGui extends Module {
     public static final String STYLE_OPAL = "Opal";
     public static final String STYLE_ZEN = "Zen";
 
+    /** 尺寸滑条范围（百分制）。Opal 以 100% 为基准、Zen 以 80% 为基准，两者共用同一绝对尺度。 */
+    public static final float MIN_SCALE_PERCENT = 80.0f;
+    public static final float MAX_SCALE_PERCENT = 100.0f;
+    public static final float DEFAULT_SCALE_PERCENT = 95.0f;
+
     public static ClickGui INSTANCE;
 
     private final ModeSetting style;
     private final BooleanSetting allowDrag;
+    /** 两个风格共用的 GUI 大小（百分制）：实际缩放系数 = 百分比 / 100。 */
+    private final NumberSetting guiScale;
 
     public ClickGui() {
         super("ClickGui", Category.RENDER, GLFW.GLFW_KEY_RIGHT_SHIFT);
         setVisible(false);
         style = new ModeSetting("Style", STYLE_OPAL, STYLE_ZEN).withDefault(STYLE_OPAL);
         allowDrag = new BooleanSetting("Allow drag", true);
+        guiScale = new NumberSetting("Scale", DEFAULT_SCALE_PERCENT, MIN_SCALE_PERCENT, MAX_SCALE_PERCENT, 1.0);
         addSetting(style);
+        addSetting(guiScale);
         addSetting(allowDrag);
         INSTANCE = this;
+    }
+
+    /**
+     * 统一 GUI 尺寸系数（两个风格共用同一绝对尺度）：{@code 滑条百分比 / 100}。
+     * <p>
+     * 例如滑条 80 → 0.80（等于 zen 现有观感）、100 → 1.00（等于 opal 现有观感）、
+     * 默认 95 → 0.95。zen / opal 的渲染与鼠标命中反算都读这一个值。
+     */
+    public static float getGuiScaleFactor() {
+        if (INSTANCE == null) {
+            return DEFAULT_SCALE_PERCENT / 100.0f;
+        }
+        return (float) (INSTANCE.guiScale.getValue().doubleValue() / 100.0);
     }
 
     /** GUI 模块的 enabled 只在界面打开期间有意义，绝不写入 modules.json / 启动恢复。 */

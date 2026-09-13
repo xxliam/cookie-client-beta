@@ -6,6 +6,7 @@ import net.minecraft.client.gui.screens.Screen;
 import net.minecraft.network.chat.Component;
 import net.minecraft.util.Mth;
 import xxliam.cookieclient.CookieClient;
+import xxliam.cookieclient.hud.DynamicIsland;
 import xxliam.cookieclient.modules.Category;
 import xxliam.cookieclient.modules.impl.render.ClickGui;
 import xxliam.cookieclient.modules.impl.render.hud.ModuleList;
@@ -23,10 +24,11 @@ import java.util.List;
 /**
  * ClickGUI：按分类横排的面板，含打开 / 关闭缩放动画。
  * <p>
- * 整体等比缩放系数固定 {@link #GUI_SCALE}（0.8 = 缩小 20%）：水平以屏幕中心为轴、
- * 垂直以面板标题行 {@link #GUI_ANCHOR_Y} 为轴——标题行贴原位、模块区向下等比收拢。
+ * 整体等比缩放系数由 ClickGui 模块的「Scale」滑条驱动（{@link #scale()}，百分制 / 100）：
+ * 水平以屏幕中心为轴、垂直以面板标题行 {@link #GUI_ANCHOR_Y} 为轴——标题行贴原位、
+ * 模块区向下等比收拢。
  * <p>
- * 右下角常驻一个圆形「E」按钮（屏幕坐标、不参与 GUI_SCALE）：按下后 {@link #hidden} 折叠
+ * 右下角常驻一个圆形「E」按钮（屏幕坐标、不参与整体缩放）：按下后 {@link #hidden} 折叠
  * 面板（不是关闭——Screen 保留、按钮保留），再按一次展开。面板折叠/展开与按钮显隐动画均与
  * clickgui 的开关动画同曲线（BACK_OUT：收起 0.22s / 展开 0.32s）；按钮阴影与 clickgui 面板
  * shadow 同款（黑色外扩 {@code BTN_SHADOW}=10、soft=10、alpha 80）。按钮直径 26（适中、不喧宾夺主），
@@ -38,10 +40,16 @@ import java.util.List;
  */
 public class NewClickGui extends Screen {
 
-    /** ClickGUI 整体等比缩放系数（0.8 = 缩小 20%）。 */
-    public static final float GUI_SCALE = 0.8f;
     /** 垂直缩放锚点：面板标题栏所在 y（面板从该行向下生长，缩放后顶部仍贴原高度）。 */
     public static final float GUI_ANCHOR_Y = 36.0f;
+
+    /**
+     * ClickGUI 整体等比缩放系数：由 ClickGui 模块的 {@code Scale} 滑条驱动
+     * （百分制 / 100，默认 0.95；zen 现有观感对应 0.80、opal 对应 1.00）。
+     */
+    public static float scale() {
+        return ClickGui.getGuiScaleFactor();
+    }
 
     /** 右下角圆形按钮直径 / 阴影扩散 / 距屏缘留白（逻辑像素）。 */
     private static final float BTN_DIAMETER = 26.0f;
@@ -67,6 +75,11 @@ public class NewClickGui extends Screen {
     private float moduleDragStartY;
     private float moduleDragBaseOffsetX;
     private float moduleDragBaseOffsetY;
+
+    // ---- 灵动岛布局编辑（仅 hidden 折叠态）：按住岛包围框沿屏幕中轴线上下拖动 ----
+    private boolean islandDragActive;
+    private float islandDragStartY;
+    private float islandDragBaseOffsetY;
 
     public NewClickGui() {
         super(Component.literal("Cookie Client ClickGUI"));
@@ -107,9 +120,10 @@ public class NewClickGui extends Screen {
         // 面板层：整体 GUI_SCALE 等比缩放；hidden 折叠/展开期间 alpha 与面板自身 scaleTimer 同步过渡
         if (panelAlpha > 0.001f) {
             float centerX = this.width / 2.0f;
-            RenderHelper.pushScaleAround(guiGraphics.pose(), centerX, GUI_ANCHOR_Y, GUI_SCALE);
-            int localMouseX = (int) ((mouseX - centerX) / GUI_SCALE + centerX);
-            int localMouseY = (int) ((mouseY - GUI_ANCHOR_Y) / GUI_SCALE + GUI_ANCHOR_Y);
+            float guiScale = scale();
+            RenderHelper.pushScaleAround(guiGraphics.pose(), centerX, GUI_ANCHOR_Y, guiScale);
+            int localMouseX = (int) ((mouseX - centerX) / guiScale + centerX);
+            int localMouseY = (int) ((mouseY - GUI_ANCHOR_Y) / guiScale + GUI_ANCHOR_Y);
             for (CategoryPanel panel : CATEGORY_PANELS) {
                 panel.render(this, guiGraphics, guiGraphics.pose(), localMouseX, localMouseY, panelAlpha, delta);
             }
@@ -154,8 +168,8 @@ public class NewClickGui extends Screen {
             return true;
         }
         if (hidden) {
-            // 折叠态：左键点在 ModuleList 包围框上开始拖动；其余点击一律吞掉
-            if (button == 0 && tryStartModuleDrag(mouseX, mouseY)) {
+            // 折叠态：左键点在各元素包围框上开始拖动；其余点击一律吞掉
+            if (button == 0 && (tryStartModuleDrag(mouseX, mouseY) || tryStartIslandDrag(mouseX, mouseY))) {
                 return true;
             }
             return true; // 面板已折叠：除按钮外不响应任何点击
@@ -176,8 +190,9 @@ public class NewClickGui extends Screen {
 
     @Override
     public boolean mouseReleased(double mouseX, double mouseY, int button) {
-        if (moduleDragActive) {
+        if (moduleDragActive || islandDragActive) {
             moduleDragActive = false;
+            islandDragActive = false;
             return true;
         }
         if (hidden) {
@@ -203,6 +218,12 @@ public class NewClickGui extends Screen {
             ModuleList.INSTANCE.setDraggedOffset(nx, ny);
             return true;
         }
+        // 灵动岛布局拖动：只取 Y（水平恒居中于屏幕中轴线），钳制在屏幕内
+        if (islandDragActive && DynamicIsland.INSTANCE != null) {
+            float ny = islandDragBaseOffsetY + (float) (mouseY - islandDragStartY);
+            DynamicIsland.INSTANCE.setDraggedOffsetY(ny);
+            return true;
+        }
         return super.mouseDragged(mouseX, mouseY, button, dragX, dragY);
     }
 
@@ -216,6 +237,17 @@ public class NewClickGui extends Screen {
         moduleDragStartY = (float) mouseY;
         moduleDragBaseOffsetX = ModuleList.INSTANCE.getOffsetX();
         moduleDragBaseOffsetY = ModuleList.INSTANCE.getOffsetY();
+        return true;
+    }
+
+    /** 命中灵动岛包围框则进入拖动态（记录抓取基准；只走 Y = 沿屏幕中轴线上下）。 */
+    private boolean tryStartIslandDrag(double mouseX, double mouseY) {
+        if (DynamicIsland.INSTANCE == null || !DynamicIsland.INSTANCE.isFrameHit(mouseX, mouseY)) {
+            return false;
+        }
+        islandDragActive = true;
+        islandDragStartY = (float) mouseY;
+        islandDragBaseOffsetY = DynamicIsland.INSTANCE.getOffsetY();
         return true;
     }
 
@@ -246,10 +278,11 @@ public class NewClickGui extends Screen {
         return hidden;
     }
 
-    /** 点击右下按钮：翻转折叠态并中止可能存在的绑定监听 / ModuleList 拖动。 */
+    /** 点击右下按钮：翻转折叠态并中止可能存在的绑定监听 / ModuleList 拖动 / 灵动岛拖动。 */
     private void toggleHidden() {
         hidden = !hidden;
         moduleDragActive = false;
+        islandDragActive = false;
         BindElement.clearListening();
     }
 
@@ -331,23 +364,23 @@ public class NewClickGui extends Screen {
     /** 屏幕 x → 未缩放空间 x（鼠标命中反算）。 */
     public double toLocalX(double screenX) {
         float centerX = this.width / 2.0f;
-        return (screenX - centerX) / GUI_SCALE + centerX;
+        return (screenX - centerX) / scale() + centerX;
     }
 
     /** 屏幕 y → 未缩放空间 y（鼠标命中反算）。 */
     public double toLocalY(double screenY) {
-        return (screenY - GUI_ANCHOR_Y) / GUI_SCALE + GUI_ANCHOR_Y;
+        return (screenY - GUI_ANCHOR_Y) / scale() + GUI_ANCHOR_Y;
     }
 
     /** 面板局部 x → 缩放后屏幕 x（scissor 等不受 Pose 影响的绘制需要）。 */
     public float toScaledX(float localX) {
         float centerX = this.width / 2.0f;
-        return centerX + (localX - centerX) * GUI_SCALE;
+        return centerX + (localX - centerX) * scale();
     }
 
     /** 面板局部 y → 缩放后屏幕 y。 */
     public float toScaledY(float localY) {
-        return GUI_ANCHOR_Y + (localY - GUI_ANCHOR_Y) * GUI_SCALE;
+        return GUI_ANCHOR_Y + (localY - GUI_ANCHOR_Y) * scale();
     }
 
     static {

@@ -1,6 +1,7 @@
 package xxliam.cookieclient.gui.dropdownclickgui.panel.property.impl;
 
 import net.minecraft.client.gui.GuiGraphics;
+import xxliam.cookieclient.gui.dropdownclickgui.DropdownClickGui;
 import xxliam.cookieclient.gui.dropdownclickgui.DropdownRender;
 import xxliam.cookieclient.gui.dropdownclickgui.panel.property.PropertyPanel;
 import xxliam.cookieclient.modules.Module;
@@ -95,7 +96,7 @@ public class ModeSettingPanel extends PropertyPanel {
 
         // 下拉选项区（scissor 到选框区域）
         if (rectHeight > 0.0f) {
-            Renderer.pushScissor(Math.round(rectX), Math.round(rectY), Math.round(rectWidth), Math.round(rectHeight));
+            DropdownClickGui.pushScaledScissor(rectX, rectY, rectWidth, rectHeight);
             float addedHeight = 0.0f;
             if (anim > 0.0f) {
                 for (String mode : setting.getModes()) {

@@ -2,6 +2,8 @@ package xxliam.cookieclient.render;
 
 import java.awt.Font;
 import java.io.InputStream;
+import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 
 /**
  * 字体仓库：集中加载 ClickGUI 使用的自定义字体。
@@ -47,6 +49,42 @@ public final class FontStore {
     public static final CustomFont MATERIALICONS_9 = loadFont(18.0f, "materialicons-regular.ttf");
     public static final CustomFont MATERIALICONS_10 = loadFont(20.0f, "materialicons-regular.ttf");
     public static final CustomFont MATERIALICONS_12 = loadFont(24.0f, "materialicons-regular.ttf");
+
+    // ---- zen watermark/HUD 体系字体（灵动岛用） ----
+    // 岛内文字统一 Poppins 系列；MATERIALICONS 例外（EventAlert 的箭头/珍珠/闪电是符号字形，
+    // Poppins 无对应码点）。字号不写死 zen 原值，由调用方传「目标视觉字号」
+    // （= zen 原始视觉字号 × IslandMetrics.scale()），从而按目标字号原生栅格化、不再靠 pose 缩小。
+    // 同一 (文件, 字号) 组合只加载一次，避免重复图谱。
+    private static final Map<String, CustomFont> HUD_FONT_POOL = new ConcurrentHashMap<>();
+
+    public static CustomFont poppinsRegular(float visualSize) {
+        return hudFont("Poppins-Regular.ttf", visualSize);
+    }
+
+    public static CustomFont poppinsMedium(float visualSize) {
+        return hudFont("Poppins-Medium.ttf", visualSize);
+    }
+
+    public static CustomFont poppinsBold(float visualSize) {
+        return hudFont("Poppins-Bold.ttf", visualSize);
+    }
+
+    public static CustomFont materialIcons(float visualSize) {
+        return hudFont("materialicons-regular.ttf", visualSize);
+    }
+
+    /**
+     * MomoSignature 手写签名体（SIL OFL，随字体已附 {@code MomoSignature-OFL.txt}）：
+     * 灵动岛品牌字 {@code Cookie} 专用。字形覆盖 ASCII（已验证 canDisplayUpTo = -1）。
+     */
+    public static CustomFont momoSignature(float visualSize) {
+        return hudFont("MomoSignature-Regular.ttf", visualSize);
+    }
+
+    private static CustomFont hudFont(String file, float visualSize) {
+        return HUD_FONT_POOL.computeIfAbsent(file + '@' + visualSize,
+                key -> loadFont(visualSize * 2.0f, file));
+    }
 
     private FontStore() {
     }

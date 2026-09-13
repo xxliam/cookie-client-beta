@@ -12,6 +12,8 @@ repositories {
 	// Loom adds the essential maven repositories to download Minecraft and libraries from automatically.
 	// See https://docs.gradle.org/current/userguide/declaring_repositories.html
 	// for more information about repositories.
+	maven("https://maven.u-team.info") // u_team_core + HyCraftHD authenticator libs (OAuth Account Manager port)
+	maven("https://maven.terraformersmc.com") // transitive modmenu dep of u_team_core
 }
 
 dependencies {
@@ -23,6 +25,19 @@ dependencies {
 	// Fabric API. This is technically optional, but you probably want it anyway.
 	modImplementation("net.fabricmc.fabric-api:fabric-api:${providers.gradleProperty("fabric_api_version").get()}")
     modImplementation("net.fabricmc:fabric-language-kotlin:${providers.gradleProperty("fabric_kotlin_version").get()}")
+
+	// OAuth Account Manager port dependencies
+	modImplementation("info.u-team:u_team_core-fabric-1.20.1:5.1.3.268")
+	include(implementation("net.hycrafthd:simple_minecraft_authenticator:2.2.2") {
+		exclude(group = "com.google.code.gson", module = "gson")
+	})
+	include(implementation("net.hycrafthd:minecraft_authenticator:3.0.5") {
+		exclude(group = "com.google.code.gson", module = "gson")
+	})
+}
+
+loom {
+	accessWidenerPath = file("src/main/resources/cookie-client.accesswidener")
 }
 
 tasks.processResources {

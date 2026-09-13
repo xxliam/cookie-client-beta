@@ -17,12 +17,14 @@
 		"MinecraftMixin",
 		"KeyboardInputMixin",
 		"LocalPlayerMixin",
-		"TitleScreenMixin",
+		"LoadingOverlayMixin",
 		"MouseHandlerMixin",
 		"LivingEntityRendererLabelMixin",
 		"GameRendererAccessor",
 		"MinecraftUserAccessor",
-		"KeyMappingAccessor"
+		"KeyMappingAccessor",
+		"CameraMixin",
+		"EntityGlowColorMixin"
 	],
 	"injectors": {
 		"defaultRequire": 1

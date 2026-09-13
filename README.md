@@ -9,7 +9,7 @@
 [![Fabric API](https://img.shields.io/badge/Fabric%20API-0.92.11%2B1.20.1-bf616a?style=flat-square)](https://modrinth.com/mod/fabric-api)
 [![Java](https://img.shields.io/badge/Java-17%2B-007396?style=flat-square)](https://adoptium.net)
 [![Version](https://img.shields.io/badge/Version-beta1.0-9a4dff?style=flat-square)](./gradle.properties)
-[![License](https://img.shields.io/badge/License-CC0--1.0-6c757d?style=flat-square)](./LICENSE)
+[![License](https://img.shields.io/badge/License-CC--BY--NC--SA--4.0-d93f3b?style=flat-square)](./LICENSE)
 
 **English** · [简体中文](README.zh-CN.md)
 
@@ -36,6 +36,29 @@ It is developed with a strong focus on rendering quality — everything from the
 - Full settings UI per module: booleans, number sliders, mode selection, multi-select, **RGBA color picker** (sliders with live preview + expand animation) and **key-bind** entries.
 - Binding supports keyboard keys **and mouse side buttons** (Mouse 4–8), both in-game (switch module) and while the ClickGUI bind element is listening.
 - A round **"E" collapse button** sits at the bottom-right corner (same soft shadow & animation as the panels): it hides the panels instead of closing the screen, and re-shows them on a second press.
+
+### ClickGUI styles (`ClickGui` module)
+
+Two ClickGUI **styles** are selectable via the ClickGui module's `Style` setting: **`Opal`** and **`Zen`**. Both share the same Open/Close key (default **Right Shift**) and are wired through `ClickGui#onEnable`.
+
+| Style | Screen | Layout | Notes |
+| :--- | :--- | :--- | :--- |
+| **Opal** | `DropdownClickGui` | Top horizontal category bar that drops down a module tree | Faithful port of OpenOpal's dropdown; interaction rules were aligned to Zen in this version — see [Interaction parity](#-interaction-parity). |
+| **Zen** | `NewClickGui` | Horizontal category panels anchored to the screen (with the bottom-right "E" collapse button) | Original Zen layout with scale animation, bind element, and tooltip support. |
+
+#### Interaction parity
+
+The **Opal** dropdown ClickGUI's mouse interactions now mirror **Zen**'s:
+
+| Action | Opal (before) | Opal (now / Zen parity) |
+| :--- | :--- | :--- |
+| Module row | 左键 toggle / 右键 expand / **中键 enter bind** | 左键 toggle / 右键 expand (中键 removed) |
+| Mode dropdown expand | 右键 | **左键** |
+| Color picker expand | 右键 | **左键** |
+| Boolean / Number / MultiSelect | 左键 only | **any button** (Zen policy) |
+| Key binding | 中键 on module row → `selectingBind` static | 展开区底部 **Bind 行**左键进入监听态（与 Zen `BindElement` 完全一致） |
+
+Binding works the same way in both styles: left-click the **Bind** row to enter listening, then press any key to bind or `ESC`/`Delete`/`Backspace` to unbind; mouse side buttons `Mouse 4`–`Mouse 8` (GLFW buttons 3–7) can also be rebound while listening. Key binds can also be changed via the `.bind <module> <key>` command.
 
 ### HUD system (faithful OpenOpal port)
 
@@ -133,7 +156,7 @@ Legend: ✅ implemented · 🚧 scaffolding (skeleton, logic not implemented yet
 | Build tooling | Gradle `9.5.1` (wrapper) + Fabric Loom `1.17-SNAPSHOT` |
 | Mappings | Mojang Official Mappings (Mojmap) |
 | Version | `beta1.0` |
-| License | CC0-1.0 |
+| License | CC BY-NC-SA 4.0 (non-commercial) |
 
 ---
 
@@ -184,7 +207,7 @@ The dev environment (game dir + configs) lives in `run/` (git-ignored). Client c
 | `Right Shift` | Open / close ClickGUI |
 | `R` | Toggle KillAura (default bind) |
 
-Every module bind can be changed with `.bind <module> <key>` or from the ClickGUI bind element (keyboard keys and `mouse4`–`mouse8` are accepted).
+Every module bind can be changed with `.bind <module> <key>` or from the **Zen** ClickGUI bind element (keyboard keys and `mouse4`–`mouse8` are accepted). The **Opal** dropdown ClickGUI also has a **Bind** row at the bottom of each expanded module's settings — left-click it to enter listening, then press any key to bind or `ESC`/`Delete`/`Backspace` to unbind; mouse side buttons `Mouse 4`–`Mouse 8` can also be rebound while listening.
 
 ---
 
@@ -295,7 +318,9 @@ This project is for **educational and research purposes only**. Client-side mods
 
 ## 📄 License
 
-Released under the [CC0-1.0](./LICENSE) license (public domain dedication).
+Released under the [CC BY-NC-SA 4.0](./LICENSE) license — **attribution required, non-commercial use only, share adaptations under the same license**. Commercial use of this client or its content is **not permitted**.
+
+Third-party components keep their own licenses: the ported [OAuth Account Manager](https://github.com/MC-U-Team/OAuth-Account-Manager) code is Apache-2.0 (© HyCraftHD / Team UTeam); the MomoSignature font is SIL OFL 1.1.
 
 ---
 

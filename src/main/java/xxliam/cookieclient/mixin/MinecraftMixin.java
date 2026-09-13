@@ -22,5 +22,4 @@ public class MinecraftMixin {
             return true;
         }
         return entity.isCurrentlyGlowing();
-    }
-}
+    }}

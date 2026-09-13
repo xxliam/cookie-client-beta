@@ -19,11 +19,15 @@ import xxliam.cookieclient.modules.impl.render.AspectRatio;
 import xxliam.cookieclient.modules.impl.render.ClickGui;
 import xxliam.cookieclient.modules.impl.render.ESP;
 import xxliam.cookieclient.modules.impl.render.FullBright;
+import xxliam.cookieclient.modules.impl.render.MotionCamera;
 import xxliam.cookieclient.modules.impl.render.NameProtect;
+import xxliam.cookieclient.modules.impl.render.Projectiles;
 import xxliam.cookieclient.modules.impl.render.Theme;
+import xxliam.cookieclient.modules.impl.render.Watermark;
 import xxliam.cookieclient.modules.impl.render.hud.ClientElements;
 import xxliam.cookieclient.modules.impl.render.hud.ModuleList;
 import xxliam.cookieclient.modules.impl.render.hud.Notifications;
+import xxliam.cookieclient.modules.impl.world.AutoPlay;
 import xxliam.cookieclient.modules.impl.world.AutoTools;
 
 import java.util.ArrayList;
@@ -62,6 +66,10 @@ public class ModuleManager {
         add(new Animations());
         add(new AutoTools());
         add(new ClickGui());
+        add(new Watermark());
+        add(new AutoPlay());
+        add(new Projectiles());
+        add(new MotionCamera());
     }
 
     public void add(Module module) {

@@ -116,13 +116,14 @@ public class CategoryPanel extends UIElement {
                 posX + 8.0f, posY + (20.0f - FontStore.AXIFORMA_EXTRABOLD_18.getFontHeight()) / 2.0f + 3.0f, ColorUtil.withAlpha(-1, alpha));
         float scrollOffset = scrollTimer.getValueF();
         float elementY = posY + 20.0f - scrollOffset;
-        // scissor 不受 Pose 矩阵影响：模块列表裁剪区域须换算到 GUI_SCALE 整体缩放后的屏幕坐标。
+        // scissor 不受 Pose 矩阵影响：模块列表裁剪区域须换算到整体缩放后的屏幕坐标。
         // 注意：要走 pushScissorScreen（输入已含整体缩放系数，仅内部再 ×guiScale），绝不能再用
-        // pushScissor，否则双重缩放（×GUI_SCALE 又 ×guiScale）会让裁剪矩形失配而溢出。
+        // pushScissor，否则双重缩放（×整体系数 又 ×guiScale）会让裁剪矩形失配而溢出。
+        float guiScale = NewClickGui.scale();
         int clipX = Math.round(clickGui.toScaledX(posX));
         int clipY = Math.round(clickGui.toScaledY(posY + 20.0f));
-        int clipW = Math.max(1, Math.round(120.0f * NewClickGui.GUI_SCALE));
-        int clipH = Math.max(1, Math.round((panelHeight - 20.0f) * NewClickGui.GUI_SCALE));
+        int clipW = Math.max(1, Math.round(120.0f * guiScale));
+        int clipH = Math.max(1, Math.round((panelHeight - 20.0f) * guiScale));
         Renderer.pushScissorScreen(clipX, clipY, clipW, clipH);
         for (ModuleElement moduleElement : moduleElements) {
             moduleElement.setX(posX);

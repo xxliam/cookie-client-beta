@@ -589,6 +589,9 @@ public class CustomFont implements Closeable {
             glyphPages.clear();
             glyphCache.clear();
             glyphVisualCache.clear();
+            // 实测墨迹（图谱像素扫描）同样依赖当前 scale：GUI 值 = 图谱像素 / scale，
+            // guiScale 变化后必须一并失效，否则按墨迹做居中的调用方会拿到过期偏移。
+            glyphRenderedCache.clear();
             initialized = false;
         } catch (Exception ignored) {
         }

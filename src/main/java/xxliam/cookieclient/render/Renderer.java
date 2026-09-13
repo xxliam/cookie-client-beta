@@ -13,6 +13,7 @@ import net.minecraft.client.gui.GuiGraphics;
 import net.minecraft.client.renderer.GameRenderer;
 import net.minecraft.client.renderer.texture.DynamicTexture;
 import org.joml.Matrix4f;
+import org.joml.Vector4f;
 import org.lwjgl.opengl.GL11;
 import org.lwjgl.opengl.GL13;
 import org.lwjgl.opengl.GL20;
@@ -612,11 +613,27 @@ public final class Renderer {
         }
         Minecraft mc = Minecraft.getInstance();
         float guiScale = (float) mc.getWindow().getGuiScale();
-        // GUI 逻辑坐标 -> 帧缓冲物理像素
-        float physX = x * guiScale;
-        float physY = y * guiScale;
-        float physW = w * guiScale;
-        float physH = h * guiScale;
+        // 局部的 (x,y)-(x+w,y+h) 先经 Pose 变换到 GUI 逻辑空间的真实落点，再换算成帧缓冲物理像素：
+        // 这样在 ClickGUI 整体缩放等「非单位 Pose」下，采样的背景区域与实际绘制位置一致
+        // （否则毛玻璃会相对面板错位）。Pose 为单位矩阵时结果与旧实现完全相同。
+        Matrix4f matrix = poseStack.last().pose();
+        Vector4f corner0 = new Vector4f(x, y, 0.0f, 1.0f);
+        Vector4f corner1 = new Vector4f(x + w, y + h, 0.0f, 1.0f);
+        matrix.transform(corner0);
+        matrix.transform(corner1);
+        float screenX = corner0.x();
+        float screenY = corner0.y();
+        float screenW = corner1.x() - corner0.x();
+        float screenH = corner1.y() - corner0.y();
+        if (screenW == 0.0f || screenH == 0.0f) {
+            return;
+        }
+        // 绘制尺寸随 Pose 缩放，圆角半径与 SDF 的 Size 也要同步（否则圆角比例不对）
+        float poseScale = w != 0.0f ? screenW / w : 1.0f;
+        float physX = screenX * guiScale;
+        float physY = screenY * guiScale;
+        float physW = screenW * guiScale;
+        float physH = screenH * guiScale;
         float fbW = screenTexW;
         float fbH = screenTexH;
         // 纹理 v 轴 bottom-up（GL 行序），clip 于帧内
@@ -629,10 +646,10 @@ public final class Renderer {
         if (ROUNDED_TEXTURE_SHADER == null || !ROUNDED_TEXTURE_SHADER.isValid()) {
             return;
         }
-        Matrix4f matrix = poseStack.last().pose();
         ROUNDED_TEXTURE_SHADER.use();
-        GL20.glUniform2f(ROUNDED_TEXTURE_SHADER.getUniformLocation("Size"), w, h);
-        GL20.glUniform1f(ROUNDED_TEXTURE_SHADER.getUniformLocation("Radius"), Math.max(radius, 0.0f));
+        GL20.glUniform2f(ROUNDED_TEXTURE_SHADER.getUniformLocation("Size"), screenW, screenH);
+        GL20.glUniform1f(ROUNDED_TEXTURE_SHADER.getUniformLocation("Radius"),
+                Math.max(radius, 0.0f) * poseScale);
         GL20.glUniform1f(ROUNDED_TEXTURE_SHADER.getUniformLocation("Smoothness"), 1.0f);
         GL20.glUniform1i(ROUNDED_TEXTURE_SHADER.getUniformLocation("ScreenTex"), 0);
         GL20.glUniform4f(ROUNDED_TEXTURE_SHADER.getUniformLocation("Region"), u0, vBottom, u1, vTop);
