@@ -2,6 +2,7 @@ package xxliam.cookieclient.gui.newclickgui;
 
 import com.mojang.blaze3d.vertex.PoseStack;
 import net.minecraft.client.gui.GuiGraphics;
+import net.minecraft.util.Mth;
 import xxliam.cookieclient.modules.Module;
 import xxliam.cookieclient.render.FontStore;
 import xxliam.cookieclient.render.Renderer;
@@ -23,10 +24,24 @@ import java.util.List;
 
 /**
  * 模块按钮：显示模块名、开关状态，右键展开设置项。
+ * <p>
+ * 纯视图：绘制 + 几何查询（{@link #isWithinBounds} / {@link #titleContains} /
+ * {@link #settingsAreaContains}）+ 语义化动作（{@link #toggleModule()} / {@link #toggleExpanded()}）。
+ * 点击路由与拖动状态由 {@code input.GuiInputRouter} 处理。
  */
 public class ModuleElement extends UIElement {
 
     public static final int BG_COLOR = ColorUtil.fromRGB(32, 32, 32);
+
+    /**
+     * 展开的「设置区」背景填充色：**完全透明** —— 模块行下方原本会铺一层比面板底色更亮的深灰
+     * （{@link #BG_COLOR} = 32,32,32，盖在面板底色 23,23,23 上），现按需求改为不着色，
+     * 展开区直接透出面板自身的底色。
+     * <p>
+     * 绘制调用**保留**（未删除），随时改回 {@code BG_COLOR} 即可恢复深灰底；
+     * alpha 由 {@code withAlpha} 乘展开进度，收起时同样无形。
+     */
+    private static final int EXPAND_BG_COLOR = 0x00000000;
 
     private final List<SettingElement<?>> settingElements = new ArrayList<>();
     private final CategoryPanel parentPanel;
@@ -85,15 +100,16 @@ public class ModuleElement extends UIElement {
         float expandAmount = expandTimer.getValueF();
         totalHeight = 20.0f + expandAmount * settingsHeightTimer.getValueF();
         isHovered = parentPanel.equals(NewClickGui.focusedPanel) && CursorUtil.isInBounds(mouseX, mouseY, posX, posY, 120.0f, totalHeight);
-        Renderer.drawFilledRect(poseStack, posX + 1.0f, posY + 20.0f, 118.0f, totalHeight - 20.0f, ColorUtil.withAlpha(BG_COLOR, expandAmount * alpha));
+        // 展开的设置区背景：现为完全透明（EXPAND_BG_COLOR），仅保留调用
+        Renderer.drawFilledRect(poseStack, posX + 1.0f, posY + 20.0f, 118.0f, totalHeight - 20.0f, ColorUtil.withAlpha(EXPAND_BG_COLOR, expandAmount * alpha));
         float hoverAmount = hoveredTimer.getValueF();
         if (hoverAmount > 0.0f) {
-            Renderer.drawFilledRect(poseStack, posX + 0.5f, posY, 119.0f, 20.0f, ColorUtil.withAlpha(-1, 0.1f * alpha * hoverAmount));
+            Renderer.drawFilledRect(poseStack, posX + 0.5f, posY, 119.0f, 20.0f, ThemeHelper.overlay(0.1f * alpha * hoverAmount));
         }
         float enabledAmount = enabledTimer.getValueF();
         if (1.0f - enabledAmount > 0.0f) {
             FontStore.AXIFORMA_REGULAR_16.drawStringCentered(poseStack, module.getName(), posX + 60.0f,
-                    posY + (20.0f - FontStore.AXIFORMA_REGULAR_16.getFontHeight()) / 2.0f, ColorUtil.withAlpha(-1, alpha * (1.0f - enabledAmount) * 0.6f));
+                    posY + (20.0f - FontStore.AXIFORMA_REGULAR_16.getFontHeight()) / 2.0f, ThemeHelper.foreground(alpha * (1.0f - enabledAmount) * 0.6f));
         }
         if (enabledAmount > 0.0f) {
             float titleY = posY + (20.0f - FontStore.AXIFORMA_BOLD_16.getFontHeight()) / 2.0f;
@@ -106,16 +122,40 @@ public class ModuleElement extends UIElement {
             FontStore.AXIFORMA_BOLD_16.drawStringCentered(poseStack, module.getName(), posX + 60.0f, titleY,
                     ColorUtil.withAlpha(titleColor, alpha * enabledAmount));
         }
-        if (!module.getSettings().isEmpty()) {
+        if (!module.getSettings().isEmpty() && !NewClickGui.displayingBinds) {
             String arrowIcon = String.valueOf('\ueb4e');
             float arrowWidth = FontStore.MATERIAL_20.getStringWidth(arrowIcon);
             float arrowX = posX + 120.0f - arrowWidth - 6.0f;
             float arrowY = posY + (20.0f - FontStore.MATERIAL_20.getFontHeight()) / 2.0f + 1.0f;
             RenderHelper.pushRotateAround(poseStack, arrowX + arrowWidth / 2.0f, arrowY + FontStore.MATERIAL_20.getFontHeight() / 2.0f - 1.0f, 180.0f * expandAmount);
-            FontStore.MATERIAL_20.drawString(poseStack, arrowIcon, arrowX, arrowY, ColorUtil.withAlpha(-1, (0.8f - 0.3f * expandAmount) * alpha));
+            FontStore.MATERIAL_20.drawString(poseStack, arrowIcon, arrowX, arrowY, ThemeHelper.foreground((0.8f - 0.3f * expandAmount) * alpha));
             RenderHelper.popPose(poseStack);
         }
-        if (isExpanded) {
+        // TAB 按住时显示绑定键名（自 opal 风格下拉 GUI 移植，该 GUI 已删除）：右对齐到展开箭头原本占的位置。
+        // 行宽只有 120px，长键名（Left Control / Page Down / Mouse 4 …）走缩写，见 BindElement#getShortKeyName。
+        if (NewClickGui.displayingBinds && module.getKeyBind() != 0) {
+            String keyString = "[" + BindElement.getShortKeyName(module.getKeyBind()) + "]";
+            float keyWidth = FontStore.AXIFORMA_BOLD_13.getStringWidth(keyString);
+            FontStore.AXIFORMA_BOLD_13.drawString(poseStack, keyString,
+                    posX + 120.0f - keyWidth - 6.0f,
+                    posY + (20.0f - FontStore.AXIFORMA_BOLD_13.getFontHeight()) / 2.0f,
+                    ThemeHelper.foreground(alpha));
+        }
+        // 设置区：只要动画高度还没归零就渲染（不能只判 isExpanded）。
+        // 原来写成 if (isExpanded)，于是右键收起的那一帧 isExpanded 立刻变 false、内容整块瞬灭，
+        // 而 totalHeight 还在按 0.2s 缩 —— 观感就是「收起时灰色下拉底直接没了、只剩空壳在缩」。
+        // 现在改用动画高度做门槛，并配合 scissor 把内容裁到该高度内：收起时内容随区域一起被裁掉，
+        // 顺带解决展开初期内容溢出到下方模块行上的问题。
+        float settingsRegionHeight = Math.max(0.0f, totalHeight - 20.0f);
+        if (settingsRegionHeight > 0.0f) {
+            float guiScale = NewClickGui.scale();
+            // scissor 不受 Pose 影响：走 pushScissorScreen（输入已含整体缩放系数，仅内部再 ×guiScale），
+            // 与 CategoryPanel 的模块列表裁剪同一套公式，且会和栈顶父级求交。
+            Renderer.pushScissorScreen(
+                    Math.round(clickGui.toScaledX(posX)),
+                    Math.round(clickGui.toScaledY(posY + 20.0f)),
+                    Math.max(1, Math.round(120.0f * guiScale)),
+                    Math.max(1, Math.round(settingsRegionHeight * guiScale)));
             float settingY = posY + 20.0f;
             for (SettingElement<?> settingElement : settingElements) {
                 if (!settingElement.getSetting().getVisibility().displayable()) {
@@ -130,43 +170,46 @@ public class ModuleElement extends UIElement {
             bindElement.setX(posX);
             bindElement.setY(settingY);
             bindElement.render(clickGui, guiGraphics, poseStack, mouseX, mouseY, alpha * expandAmount, partialTicks);
+            Renderer.popScissor();
         }
     }
 
-    @Override
-    public boolean mouseClicked(double mouseX, double mouseY, int button) {
-        if (!isHovered) {
-            return false;
-        }
-        if (CursorUtil.isInBounds((float) mouseX, (float) mouseY, posX, posY, 120.0f, 20.0f)) {
-            if (button == 0) {
-                module.setEnabled(!module.isEnabled());
-            } else if (button == 1 && !module.getSettings().isEmpty()) {
-                isExpanded = !isExpanded;
-            }
-            return true;
-        }
-        if (CursorUtil.isInBounds((float) mouseX, (float) mouseY, posX, posY + 20.0f, 120.0f, totalHeight - 20.0f)) {
-            for (SettingElement<?> settingElement : settingElements) {
-                if (settingElement.getSetting().getVisibility().displayable() && settingElement.mouseClicked(mouseX, mouseY, button)) {
-                    return true;
-                }
-            }
-            if (bindElement.mouseClicked(mouseX, mouseY, button)) {
-                return true;
-            }
-        }
-        return isHovered;
-    }
+    // ------------------------------------------------------------------
+    // 几何查询 + 动作（供 GuiInputRouter 调用）
+    // ------------------------------------------------------------------
 
     @Override
-    public boolean mouseReleased(double mouseX, double mouseY, int button) {
-        for (SettingElement<?> settingElement : settingElements) {
-            if (settingElement.mouseReleased(mouseX, mouseY, button)) {
-                return true;
-            }
-        }
-        return bindElement.mouseReleased(mouseX, mouseY, button);
+    public boolean contains(double mouseX, double mouseY) {
+        return CursorUtil.isInBounds((float) mouseX, (float) mouseY, posX, posY, 120.0f, totalHeight);
+    }
+
+    /** 命中查询：整行（标题行 + 展开的设置区）。 */
+    public boolean isWithinBounds(double mouseX, double mouseY) {
+        return CursorUtil.isInBounds((float) mouseX, (float) mouseY, posX, posY, 120.0f, totalHeight);
+    }
+
+    /** 标题行命中（左键开关 / 右键展开设置）。 */
+    public boolean titleContains(double mouseX, double mouseY) {
+        return CursorUtil.isInBounds((float) mouseX, (float) mouseY, posX, posY, 120.0f, 20.0f);
+    }
+
+    /** 展开的设置区命中（标题行以下）。 */
+    public boolean settingsAreaContains(double mouseX, double mouseY) {
+        return CursorUtil.isInBounds((float) mouseX, (float) mouseY, posX, posY + 20.0f, 120.0f, totalHeight - 20.0f);
+    }
+
+    /** 左键点击标题行：切换模块开关。 */
+    public void toggleModule() {
+        module.setEnabled(!module.isEnabled());
+    }
+
+    /** 右键点击标题行：展开 / 收起设置区。 */
+    public void toggleExpanded() {
+        isExpanded = !isExpanded;
+    }
+
+    public BindElement getBindElement() {
+        return bindElement;
     }
 
     public List<SettingElement<?>> getSettingElements() {

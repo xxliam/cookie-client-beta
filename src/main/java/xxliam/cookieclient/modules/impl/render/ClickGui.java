@@ -5,20 +5,24 @@ import net.minecraft.client.gui.screens.Screen;
 import org.lwjgl.glfw.GLFW;
 import xxliam.cookieclient.CookieClient;
 import xxliam.cookieclient.gui.newclickgui.NewClickGui;
-import xxliam.cookieclient.gui.dropdownclickgui.DropdownClickGui;
+import xxliam.cookieclient.gui.panelclickgui.PanelClickGui;
 import xxliam.cookieclient.modules.Category;
 import xxliam.cookieclient.modules.Module;
-import xxliam.cookieclient.settings.impl.BooleanSetting;
 import xxliam.cookieclient.settings.impl.ModeSetting;
-import xxliam.cookieclient.settings.impl.NumberSetting;
 
 /**
  * ClickGUI 总开关：绑定键（默认右 Shift）打开 / 关闭设置界面。
  * <p>
- * Style 二选一：{@code Opal} = Opal DropdownClickGui（顶部横向分类条 + 下拉模块树），
- * {@code Zen} = 原生 NewClickGui（分类面板横排）。两者共用一个入口键，由本模块路由。
+ * 界面风格由 {@code Mode} 设置切换（照搬 OpenZen 的 ClickGuiModule.Mode）：
+ * <ul>
+ *     <li>{@code Zen}（默认）→ {@link NewClickGui}：分类面板横排（zen 的 newclickgui）；</li>
+ *     <li>{@code Panel} → {@link PanelClickGui}：屏幕中央 600×400 大面板（zen 的 PanelClickGui，
+ *         含图标分类栏 / 模块列表 / 设置面板 / Profile 头像组件 / toast / 按键浮层）。</li>
+ * </ul>
+ * 历史上曾支持与 OpenOpal 的 DropdownClickGui 二选一（{@code Style} 设置），2026-09-18 按用户要求
+ * **整体删除 opal 风格**，连带删掉两个只为它服务的设置（{@code Scale} 滑条、{@code Allow drag}）。
  * <p>
- * 生命周期与 GUI 绑定：onEnable 打开对应风格 Screen，Screen 播放完关闭动画后回调
+ * 生命周期与 GUI 绑定：onEnable 打开 Screen，Screen 播放完关闭动画后回调
  * {@link #onGuiClosed()} 将本模块复位——因此本模块的 enabled 状态只在 GUI 打开期间为
  * true，配置持久化的是关闭态，重进游戏不会自动弹窗。
  * <p>
@@ -27,60 +31,38 @@ import xxliam.cookieclient.settings.impl.NumberSetting;
  */
 public class ClickGui extends Module {
 
-    public static final String STYLE_OPAL = "Opal";
-    public static final String STYLE_ZEN = "Zen";
-
-    /** 尺寸滑条范围（百分制）。Opal 以 100% 为基准、Zen 以 80% 为基准，两者共用同一绝对尺度。 */
-    public static final float MIN_SCALE_PERCENT = 80.0f;
-    public static final float MAX_SCALE_PERCENT = 100.0f;
-    public static final float DEFAULT_SCALE_PERCENT = 95.0f;
+    /**
+     * GUI 尺寸系数（固定值）。
+     * <p>
+     * zen 的原始尺寸是硬编码常量 {@code GUI_SCALE = 0.80f}（缩小 20%）；本值 = 0.80 × 1.2 = 0.96，
+     * 即「调回原本大小并加大 20%」。原 opal 风格与其绝对尺度滑条（{@code Scale}）已随 opal GUI 一并删除。
+     * <p>
+     * 仅作用于 {@link NewClickGui}；{@link PanelClickGui} 有自己的缩放档位（ProfileWidget 的
+     * SettingsPopup 里 50%~150%），两者互不影响。
+     */
+    public static final float ZEN_SCALE = 0.96f;
 
     public static ClickGui INSTANCE;
 
-    private final ModeSetting style;
-    private final BooleanSetting allowDrag;
-    /** 两个风格共用的 GUI 大小（百分制）：实际缩放系数 = 百分比 / 100。 */
-    private final NumberSetting guiScale;
+    /** 界面风格：Zen（zen 的分类面板横排）| Panel（zen 的居中大面板）。默认 Zen。 */
+    public final ModeSetting mode = new ModeSetting("Mode", "Zen", "Panel").withDefault("Zen");
 
     public ClickGui() {
         super("ClickGui", Category.RENDER, GLFW.GLFW_KEY_RIGHT_SHIFT);
         setVisible(false);
-        style = new ModeSetting("Style", STYLE_OPAL, STYLE_ZEN).withDefault(STYLE_OPAL);
-        allowDrag = new BooleanSetting("Allow drag", true);
-        guiScale = new NumberSetting("Scale", DEFAULT_SCALE_PERCENT, MIN_SCALE_PERCENT, MAX_SCALE_PERCENT, 1.0);
-        addSetting(style);
-        addSetting(guiScale);
-        addSetting(allowDrag);
+        addSetting(mode);
         INSTANCE = this;
     }
 
-    /**
-     * 统一 GUI 尺寸系数（两个风格共用同一绝对尺度）：{@code 滑条百分比 / 100}。
-     * <p>
-     * 例如滑条 80 → 0.80（等于 zen 现有观感）、100 → 1.00（等于 opal 现有观感）、
-     * 默认 95 → 0.95。zen / opal 的渲染与鼠标命中反算都读这一个值。
-     */
-    public static float getGuiScaleFactor() {
-        if (INSTANCE == null) {
-            return DEFAULT_SCALE_PERCENT / 100.0f;
-        }
-        return (float) (INSTANCE.guiScale.getValue().doubleValue() / 100.0);
+    /** GUI 尺寸系数：固定 {@link #ZEN_SCALE}（原 0.80 加大 20%）。 */
+    public static float getZenScaleFactor() {
+        return ZEN_SCALE;
     }
 
     /** GUI 模块的 enabled 只在界面打开期间有意义，绝不写入 modules.json / 启动恢复。 */
     @Override
     public boolean shouldPersistEnabled() {
         return false;
-    }
-
-    /** 当前 GUI 风格（供路由 / 其它模块查询）。 */
-    public static String getStyle() {
-        return INSTANCE != null ? INSTANCE.style.getValue() : STYLE_OPAL;
-    }
-
-    /** Dropdown 是否允许拖动分类条（仅 Opal 风格读取）。 */
-    public static boolean isAllowDrag() {
-        return INSTANCE == null || INSTANCE.allowDrag.getValue();
     }
 
     @Override
@@ -94,23 +76,24 @@ public class ClickGui extends Module {
             disable();
             return;
         }
-        if (STYLE_ZEN.equals(style.getValue())) {
-            mc.setScreen(new NewClickGui());
+        if (mode.is("Panel")) {
+            mc.setScreen(PanelClickGui.INSTANCE);
+            CookieClient.LOGGER.info("[ClickGui] enabled, opened PanelClickGui");
         } else {
-            mc.setScreen(new DropdownClickGui());
+            mc.setScreen(new NewClickGui());
+            CookieClient.LOGGER.info("[ClickGui] enabled, opened NewClickGui");
         }
-        CookieClient.LOGGER.info("[ClickGui] enabled, opened " + (STYLE_ZEN.equals(style.getValue()) ? "NewClickGui" : "DropdownClickGui"));
     }
 
     @Override
     protected void onDisable() {
-        // 模块在 GUI 内部被关 / 快捷键关：同步关闭当前打开的对应风格 Screen（走其动画）
+        // 模块在 GUI 内部被关 / 快捷键关：同步关闭当前打开的 Screen（走其动画）
         Minecraft mc = Minecraft.getInstance();
         if (mc == null) {
             return;
         }
         Screen screen = mc.screen;
-        if (screen instanceof NewClickGui || screen instanceof DropdownClickGui) {
+        if (screen instanceof NewClickGui || screen instanceof PanelClickGui) {
             CookieClient.LOGGER.info("[ClickGui] disabled, closing screen " + screen.getClass().getSimpleName());
             screen.onClose();
         }

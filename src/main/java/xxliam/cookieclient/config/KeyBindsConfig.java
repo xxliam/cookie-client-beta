@@ -2,20 +2,22 @@ package xxliam.cookieclient.config;
 
 import com.google.gson.Gson;
 import com.google.gson.GsonBuilder;
+import com.google.gson.JsonObject;
 import com.google.gson.reflect.TypeToken;
 import xxliam.cookieclient.CookieClient;
 import xxliam.cookieclient.modules.Module;
 
 import java.io.IOException;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
-import java.util.HashMap;
-import java.util.List;
+import java.nio.file.Path;
 import java.util.Map;
 
 /**
  * 按键绑定配置：保存每个模块绑定的 GLFW 键码（binds.json）。
  * <p>
- * 格式：{ "ModuleName": keyCode, ... }，未绑定（keyCode <= 0）不写入。
+ * 格式：{@code { "ModuleName": keyCode, ... }}。所有模块都写入（含未绑定的 0），
+ * 这样「解绑」操作也能被持久化。
  */
 public class KeyBindsConfig extends Config {
 
@@ -25,41 +27,51 @@ public class KeyBindsConfig extends Config {
         super("binds.json");
     }
 
-    public void load(List<Module> modules) {
-        if (!Files.exists(getPath())) {
+    public void save() {
+        JsonObject root = new JsonObject();
+        for (Module module : CookieClient.MODULE_MANAGER.getModules()) {
+            root.addProperty(module.getName(), module.getKeyBind());
+        }
+        write(GSON.toJson(root));
+    }
+
+    public void load() {
+        String json = read();
+        if (json == null) {
             return;
         }
-        try {
-            Map<String, Number> binds = GSON.fromJson(
-                    Files.readString(getPath()),
-                    new TypeToken<Map<String, Number>>() {
-                    }.getType());
-            if (binds == null) {
-                return;
+        Map<String, Number> map = GSON.fromJson(json, new TypeToken<Map<String, Number>>() {
+        }.getType());
+        if (map == null) {
+            return;
+        }
+        for (Module module : CookieClient.MODULE_MANAGER.getModules()) {
+            Number key = map.get(module.getName());
+            if (key != null) {
+                module.setKeyBind(key.intValue());
             }
-            for (Module module : modules) {
-                Number key = binds.get(module.getName());
-                if (key != null) {
-                    module.setKeyBind(key.intValue());
-                }
-            }
-        } catch (IOException e) {
-            CookieClient.LOGGER.error("Failed to load key binds config", e);
         }
     }
 
-    public void save(List<Module> modules) {
-        Map<String, Integer> binds = new HashMap<>();
-        for (Module module : modules) {
-            if (module.getKeyBind() > 0) {
-                binds.put(module.getName(), module.getKeyBind());
-            }
+    private void write(String json) {
+        try {
+            Files.createDirectories(DIRECTORY);
+            Files.writeString(getPath(), json, StandardCharsets.UTF_8);
+        } catch (IOException e) {
+            CookieClient.LOGGER.warn("[Config] failed to write {}", getFileName(), e);
+        }
+    }
+
+    private String read() {
+        Path path = getPath();
+        if (!Files.exists(path)) {
+            return null;
         }
         try {
-            Files.createDirectories(getPath().getParent());
-            Files.writeString(getPath(), GSON.toJson(binds));
+            return Files.readString(path, StandardCharsets.UTF_8);
         } catch (IOException e) {
-            CookieClient.LOGGER.error("Failed to save key binds config", e);
+            CookieClient.LOGGER.warn("[Config] failed to read {}", getFileName(), e);
+            return null;
         }
     }
 }

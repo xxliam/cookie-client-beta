@@ -160,8 +160,153 @@ public final class Renderer {
         RenderSystem.disableBlend();
     }
 
-    /** 把 BufferedImage 上传为 DynamicTexture（不注册进 TextureManager，由缓存持有强引用）。 */
-    private static DynamicTexture createShadowTexture(BufferedImage source) {
+    // ---------------------------------------------------------------------
+    // 批量直绘（把 N 次 begin/end 合并成 1 次 draw 调用）
+    // ---------------------------------------------------------------------
+
+    /*
+     * 动机：MC 的立即模式里，每个 drawRect / drawRoundedRect / drawString 都是
+     * 「setShader + begin + end + drawWithShader」，即一次独立的 draw 调用（含 GL 状态与上传开销）。
+     * ModuleList 每行要画阴影 / 行底 / 两条 1px 竖条 / 两遍文字 ≈ 6 次 draw，20 行就是 120 次，
+     * 实测能把 200fps 压到 120fps。这里给出「纯色矩形批次」与「阴影批次」两个通道，
+     * 配合 CustomFont 的批量文字通道，把整列 HUD 的 draw 调用压到 3 次。
+     */
+
+    /** 批次是否已打开（防御性：未开批次时 batch* 一律空转，绝不半开缓冲区）。 */
+    private static boolean rectBatchOpen;
+    private static boolean shadowBatchOpen;
+
+    /** 开始一批纯色矩形（POSITION_COLOR）。 */
+    public static void beginRectBatch() {
+        if (rectBatchOpen) {
+            throw new IllegalStateException("矩形批次不可嵌套");
+        }
+        RenderSystem.enableBlend();
+        RenderSystem.defaultBlendFunc();
+        RenderSystem.setShader(GameRenderer::getPositionColorShader);
+        Tesselator.getInstance().getBuilder().begin(VertexFormat.Mode.QUADS, DefaultVertexFormat.POSITION_COLOR);
+        rectBatchOpen = true;
+    }
+
+    /** 往矩形批次追加一个矩形（等价 {@link #drawRect}，但不自己提交）。 */
+    public static void batchRect(PoseStack poseStack, float x, float y, float width, float height, int color) {
+        if (!rectBatchOpen || width <= 0.0f || height <= 0.0f) {
+            return;
+        }
+        emitRect(Tesselator.getInstance().getBuilder(), poseStack.last().pose(), x, y, width, height, color);
+    }
+
+    /** 结束矩形批次：一次 draw 提交全部矩形。 */
+    public static void endRectBatch() {
+        if (!rectBatchOpen) {
+            return;
+        }
+        rectBatchOpen = false;
+        BufferUploader.drawWithShader(Tesselator.getInstance().getBuilder().end());
+        RenderSystem.disableBlend();
+    }
+
+    /**
+     * 阴影批次的共享模糊纹理：**与宽度无关**（只按 高度/羽化/缩放 建一张），
+     * 绘制时用「左右两段固定宽的羽化带 + 中间拉伸」的九宫格切法还原任意宽度，
+     * 因此一批里所有矩形共用一次纹理绑定 —— 这是相对逐行 {@link #drawShadow}
+     * （每行一个不同宽度的模糊纹理 + 一次独立 draw）的关键差别。
+     */
+    private static DynamicTexture shadowBatchTexture;
+    private static float shadowBatchBlur;
+    private static int shadowBatchHeight;
+    private static int shadowBatchScale;
+
+    /** 中间拉伸区参考宽度（逻辑像素；越大纹理越宽，取 64 足够）。 */
+    private static final float SHADOW_BATCH_REF_WIDTH = 64.0f;
+
+    /** 开始一批阴影（同批内 blurRadius 与矩形高度必须一致）。 */
+    public static void beginShadowBatch(float blurRadius, float height) {
+        if (shadowBatchOpen) {
+            throw new IllegalStateException("阴影批次不可嵌套");
+        }
+        int guiScale = Math.max(1, (int) Minecraft.getInstance().getWindow().getGuiScale());
+        int heightKey = Math.max(1, Math.round(height));
+        if (shadowBatchTexture == null || shadowBatchBlur != blurRadius
+                || shadowBatchHeight != heightKey || shadowBatchScale != guiScale) {
+            shadowBatchTexture = buildShadowTexture(SHADOW_BATCH_REF_WIDTH, height, blurRadius, guiScale);
+            shadowBatchBlur = blurRadius;
+            shadowBatchHeight = heightKey;
+            shadowBatchScale = guiScale;
+        }
+        RenderSystem.enableBlend();
+        RenderSystem.defaultBlendFunc();
+        RenderSystem.setShader(GameRenderer::getPositionTexColorShader);
+        RenderSystem.setShaderTexture(0, shadowBatchTexture.getId());
+        Tesselator.getInstance().getBuilder().begin(VertexFormat.Mode.QUADS, DefaultVertexFormat.POSITION_TEX_COLOR);
+        shadowBatchOpen = true;
+    }
+
+    /**
+     * 往阴影批次追加一个矩形。左右各 {@code blur} 宽的羽化带按原纹理 UV 绘制（像素级等同原阴影），
+     * 中间为纯色区，横向拉伸不影响观感（模糊对中间均匀区可分离、无变化）。
+     */
+    public static void batchShadow(PoseStack poseStack, float x, float y, float width, float height, int color) {
+        if (!shadowBatchOpen || width <= 0.0f || height <= 0.0f) {
+            return;
+        }
+        // 与 drawShadow 同语义：先按 blurRadius 外扩，再贴同一张模糊纹理
+        x -= shadowBatchBlur;
+        y -= shadowBatchBlur;
+        width += shadowBatchBlur * 2.0f;
+        height += shadowBatchBlur * 2.0f;
+        BufferBuilder buffer = Tesselator.getInstance().getBuilder();
+        Matrix4f matrix = poseStack.last().pose();
+        float textureWidth = SHADOW_BATCH_REF_WIDTH + shadowBatchBlur * 2.0f;
+        float cap = shadowBatchBlur;                       // 左右羽化带宽度（GUI 单位）
+        if (cap <= 0.0f || width <= cap * 2.0f) {
+            // 极窄矩形：整条拉伸（羽化带会被压缩，仍是柔和边缘）
+            emitTexturedQuad(buffer, matrix, x, y, width, height, 0.0f, 1.0f, 0.0f, 1.0f, color);
+            return;
+        }
+        float capU = cap / textureWidth;
+        // 左羽化带
+        emitTexturedQuad(buffer, matrix, x, y, cap, height, 0.0f, capU, 0.0f, 1.0f, color);
+        // 中间拉伸区
+        emitTexturedQuad(buffer, matrix, x + cap, y, width - cap * 2.0f, height, capU, 1.0f - capU, 0.0f, 1.0f, color);
+        // 右羽化带
+        emitTexturedQuad(buffer, matrix, x + width - cap, y, cap, height, 1.0f - capU, 1.0f, 0.0f, 1.0f, color);
+    }
+
+    /** 结束阴影批次：一次 draw 提交全部阴影。 */
+    public static void endShadowBatch() {
+        if (!shadowBatchOpen) {
+            return;
+        }
+        shadowBatchOpen = false;
+        BufferUploader.drawWithShader(Tesselator.getInstance().getBuilder().end());
+        RenderSystem.disableBlend();
+    }
+
+    private static void emitTexturedQuad(BufferBuilder buffer, Matrix4f matrix, float x, float y,
+                                         float width, float height, float u1, float u2, float v1, float v2, int color) {
+        buffer.vertex(matrix, x, y, 0.0f).uv(u1, v1).color(color).endVertex();
+        buffer.vertex(matrix, x, y + height, 0.0f).uv(u1, v2).color(color).endVertex();
+        buffer.vertex(matrix, x + width, y + height, 0.0f).uv(u2, v2).color(color).endVertex();
+        buffer.vertex(matrix, x + width, y, 0.0f).uv(u2, v1).color(color).endVertex();
+    }
+
+    /** 生成「参考宽度 + 左右各 blur」的白矩形高斯模糊纹理（阴影批次的唯一纹理）。 */
+    private static DynamicTexture buildShadowTexture(float refWidth, float height, float blurRadius, int scale) {
+        float totalWidth = refWidth + blurRadius * 2.0f;
+        float totalHeight = height + blurRadius * 2.0f;
+        int w = Math.max((int) Math.ceil(totalWidth * scale), 1);
+        int h = Math.max((int) Math.ceil(totalHeight * scale), 1);
+        int r = Math.max((int) Math.ceil(blurRadius * scale), 1);
+        BufferedImage image = new BufferedImage(w, h, BufferedImage.TYPE_INT_ARGB);
+        Graphics2D graphics = image.createGraphics();
+        graphics.setColor(new Color(255, 255, 255, 255));
+        graphics.fillRect(r, r, Math.max(w - r * 2, 1), Math.max(h - r * 2, 1));
+        graphics.dispose();
+        return createShadowTexture(new GaussianBlur(blurRadius * scale).filter(image, null));
+    }
+
+    /** 把 BufferedImage 上传为 DynamicTexture（不注册进 TextureManager，由缓存持有强引用）。 */    private static DynamicTexture createShadowTexture(BufferedImage source) {
         int width = source.getWidth();
         int height = source.getHeight();
         NativeImage nativeImage = new NativeImage(NativeImage.Format.RGBA, width, height, false);
@@ -676,5 +821,58 @@ public final class Renderer {
         if (ROUNDED_TEXTURE_SHADER == null) {
             ROUNDED_TEXTURE_SHADER = new ShaderProgram("rounded_texture", "vertex_color", ShaderFormats.POSITION_UV_COLOR);
         }
+    }
+
+    /**
+     * 用任意纹理的指定 UV 子区域填充一个「圆角裁剪」矩形。
+     * <p>
+     * 搬运自 OpenZen {@code RoundedRectShader.drawTextured}（zen 的圆角纹理通道）：复用同一个
+     * {@code rounded_texture} shader，把 {@code Region} 设为传入的 UV 子矩形、{@code Lod} 固定 0，
+     * 因此可以做「带圆角的玩家头像」（皮肤贴图的脸 / 帽层两个 UV 区域）等。
+     *
+     * @param textureId GL 纹理 id（如 {@code mc.getTextureManager().getTexture(skin).getId()}）
+     * @param u0/v0/u1/v1 纹理 UV 子区域；{@code (u0,v0)} 对应矩形左上角、{@code (u1,v1)} 对应右下角
+     * @param color     ARGB 着色（RGB 与纹理相乘，alpha 控制整体不透明度）
+     */
+    public static void drawRoundedTexture(PoseStack poseStack, int textureId, float x, float y, float width, float height,
+                                          float radius, float u0, float v0, float u1, float v1, int color) {
+        if (width <= 0.0f || height <= 0.0f || textureId == 0) {
+            return;
+        }
+        ensureRoundedTextureShader();
+        if (ROUNDED_TEXTURE_SHADER == null || !ROUNDED_TEXTURE_SHADER.isValid()) {
+            // shader 不可用（驱动不支持）时退化成普通纯色圆角矩形，避免整块内容消失
+            drawRoundedRect(poseStack, x, y, width, height, radius, color);
+            return;
+        }
+        float poseScale = Math.max(0.01f, poseStack.last().pose().getScale(new org.joml.Vector3f()).x);
+        Matrix4f matrix = poseStack.last().pose();
+        ROUNDED_TEXTURE_SHADER.use();
+        GL20.glUniform2f(ROUNDED_TEXTURE_SHADER.getUniformLocation("Size"), width, height);
+        GL20.glUniform1f(ROUNDED_TEXTURE_SHADER.getUniformLocation("Radius"), Math.max(radius, 0.0f) * poseScale);
+        GL20.glUniform1f(ROUNDED_TEXTURE_SHADER.getUniformLocation("Smoothness"), 1.0f);
+        GL20.glUniform1i(ROUNDED_TEXTURE_SHADER.getUniformLocation("ScreenTex"), 0);
+        GL20.glUniform4f(ROUNDED_TEXTURE_SHADER.getUniformLocation("Region"), u0, v0, u1, v1);
+        GL20.glUniform1f(ROUNDED_TEXTURE_SHADER.getUniformLocation("Lod"), 0.0f);
+
+        int prevTexture = GL11.glGetInteger(GL11.GL_TEXTURE_BINDING_2D);
+        GL13.glActiveTexture(GL13.GL_TEXTURE0);
+        GL11.glBindTexture(GL11.GL_TEXTURE_2D, textureId);
+        RenderSystem.enableBlend();
+        RenderSystem.defaultBlendFunc();
+        float a = (float) (color >> 24 & 0xFF) / 255.0f;
+        float r = (float) (color >> 16 & 0xFF) / 255.0f;
+        float g = (float) (color >> 8 & 0xFF) / 255.0f;
+        float b = (float) (color & 0xFF) / 255.0f;
+        BufferBuilder buffer = Tesselator.getInstance().getBuilder();
+        buffer.begin(VertexFormat.Mode.QUADS, DefaultVertexFormat.POSITION_TEX_COLOR);
+        buffer.vertex(matrix, x, y, 0.0f).uv(0.0f, 0.0f).color(r, g, b, a).endVertex();
+        buffer.vertex(matrix, x, y + height, 0.0f).uv(0.0f, 1.0f).color(r, g, b, a).endVertex();
+        buffer.vertex(matrix, x + width, y + height, 0.0f).uv(1.0f, 1.0f).color(r, g, b, a).endVertex();
+        buffer.vertex(matrix, x + width, y, 0.0f).uv(1.0f, 0.0f).color(r, g, b, a).endVertex();
+        BufferUploader.draw(buffer.end());
+        RenderSystem.disableBlend();
+        ROUNDED_TEXTURE_SHADER.stopUsing();
+        GL11.glBindTexture(GL11.GL_TEXTURE_2D, prevTexture);
     }
 }

@@ -152,13 +152,20 @@ public final class ColorUtil {
 
     public static int interpolateColors(final int color1, final int color2, float amount) {
         amount = Math.min(1, Math.max(0, amount));
-        final int[] c1 = hexToRGBA(color1);
-        final int[] c2 = hexToRGBA(color2);
+        // 各通道用局部变量插值，不经过 hexToRGBA 的临时 int[]（HUD 每行每帧都调，避免 GC 压力）
+        final int r1 = (color1 >> 16) & 0xFF;
+        final int g1 = (color1 >> 8) & 0xFF;
+        final int b1 = color1 & 0xFF;
+        final int a1 = (color1 >>> 24) & 0xFF;
+        final int r2 = (color2 >> 16) & 0xFF;
+        final int g2 = (color2 >> 8) & 0xFF;
+        final int b2 = color2 & 0xFF;
+        final int a2 = (color2 >>> 24) & 0xFF;
         return rgbaToHex(
-                (int) (c1[0] + (c2[0] - c1[0]) * amount),
-                (int) (c1[1] + (c2[1] - c1[1]) * amount),
-                (int) (c1[2] + (c2[2] - c1[2]) * amount),
-                (int) (c1[3] + (c2[3] - c1[3]) * amount));
+                (int) (r1 + (r2 - r1) * amount),
+                (int) (g1 + (g2 - g1) * amount),
+                (int) (b1 + (b2 - b1) * amount),
+                (int) (a1 + (a2 - a1) * amount));
     }
 
     /** 彩虹色（speed 毫秒每整圈、index 相位、saturation/brightness）。照搬 opal。 */
@@ -172,5 +179,23 @@ public final class ColorUtil {
         int angle = (int) (((System.currentTimeMillis()) / speed - index) % 360);
         angle = (angle >= 180 ? 360 - angle : angle) * 2;
         return interpolateColors(startColor, endColor, angle / 360f);
+    }
+
+    /**
+     * 在 HSB 空间插值两个颜色（hue / saturation / brightness 各自线性），alpha 在 RGB 空间线性插值。
+     * <p>
+     * 逐字搬运自 OpenZen {@code RenderUtil.lerpColorHSB}（zen 的数值控件用它做进度色渐变）。
+     * 注意：hue 不做最短弧处理，与 zen 行为一致。
+     */
+    public static int lerpColorHSB(int colorA, int colorB, float progress) {
+        float[] hsbA = new float[3];
+        float[] hsbB = new float[3];
+        Color.RGBtoHSB(colorA >> 16 & 0xFF, colorA >> 8 & 0xFF, colorA & 0xFF, hsbA);
+        Color.RGBtoHSB(colorB >> 16 & 0xFF, colorB >> 8 & 0xFF, colorB & 0xFF, hsbB);
+        float hue = hsbA[0] + (hsbB[0] - hsbA[0]) * progress;
+        float sat = hsbA[1] + (hsbB[1] - hsbA[1]) * progress;
+        float bri = hsbA[2] + (hsbB[2] - hsbA[2]) * progress;
+        int alpha = (int) ((colorA >> 24 & 0xFF) + ((colorB >> 24 & 0xFF) - (colorA >> 24 & 0xFF)) * progress);
+        return alpha << 24 | Color.HSBtoRGB(hue, sat, bri) & 0xFFFFFF;
     }
 }

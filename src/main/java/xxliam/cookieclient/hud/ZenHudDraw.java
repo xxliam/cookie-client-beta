@@ -20,7 +20,7 @@ import java.util.List;
  * <p>
  * 文字：zen 的 {@code DrawContext.drawString} 一律以「基线」为 y 语义，而 cookie 的
  * {@link CustomFont} 是「字形盒顶」锚点；换算公式沿用本项目既有约定
- * {@code top = baselineY - ascent / scale}（与 DropdownRender.baseline 一致）。
+ * {@code top = baselineY - ascent / scale}（照搬 opal DropdownRender.baseline 的公式）。
  * {@link #fontAscentHack} 对应 zen {@code GlHelper.getFontAscent} 的居中 hack。
  * <p>
  * 矢量：{@link #drawArc} 用 TRIANGLE_STRIP 粗弧（等价 zen {@code DrawContext.drawArc}），

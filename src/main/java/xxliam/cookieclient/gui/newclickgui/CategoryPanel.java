@@ -3,17 +3,18 @@ package xxliam.cookieclient.gui.newclickgui;
 import com.mojang.blaze3d.vertex.PoseStack;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.GuiGraphics;
-import net.minecraft.util.Mth;
 import xxliam.cookieclient.CookieClient;
 import xxliam.cookieclient.modules.Category;
 import xxliam.cookieclient.modules.Module;
 import xxliam.cookieclient.render.FontStore;
 import xxliam.cookieclient.render.Renderer;
+import xxliam.cookieclient.utils.animation.Scroller;
 import xxliam.cookieclient.utils.animation.SmoothAnimationTimer;
 import xxliam.cookieclient.utils.math.Easings;
 import xxliam.cookieclient.utils.misc.CursorUtil;
 import xxliam.cookieclient.utils.render.ColorUtil;
 import xxliam.cookieclient.utils.render.RenderHelper;
+import xxliam.cookieclient.utils.render.ThemeHelper;
 
 import java.awt.Color;
 import java.util.ArrayList;
@@ -39,10 +40,6 @@ public class CategoryPanel extends UIElement {
     private float posY;
     private float panelHeight;
     private boolean isHovered;
-    private boolean isDragging;
-    private float dragOffsetX;
-    private float dragOffsetY;
-    private float scrollAmount;
     private float prevHeight;
     private SettingElement<?> hoveredSettingElement;
     private String tooltipText = "";
@@ -51,7 +48,8 @@ public class CategoryPanel extends UIElement {
     private boolean showTooltip;
 
     private final SmoothAnimationTimer scaleTimer = new SmoothAnimationTimer();
-    private final SmoothAnimationTimer scrollTimer = new SmoothAnimationTimer();
+    /** 垂直滚动（照搬 opal {@code Scroller}：EASE_OUT_EXPO 250ms、每格 50px、偏移恒 ≤ 0）。 */
+    private final Scroller scroller = new Scroller();
     private final SmoothAnimationTimer tooltipTimer = new SmoothAnimationTimer();
     private final SmoothAnimationTimer collapseTimer = new SmoothAnimationTimer();
     /** 底部展开余量动画：有模块展开时黑色背景底边平滑多长出的一小截（见 {@link #BOTTOM_PAD}）。 */
@@ -92,15 +90,12 @@ public class CategoryPanel extends UIElement {
         bottomPadTimer.tick();
         // 面板随内容增长到屏幕可用高度：原上限 240（模块>=10 时固定 260 不增长）在新增 HUD 模块后不够用。
         panelHeight = Math.min(totalContentHeight, maxContentHeight()) + 20.0f + bottomPadTimer.getValueF();
-        scrollAmount = Mth.clamp(scrollAmount, 0.0f, totalContentHeight - panelHeight + 20.0f);
-        scrollTimer.animate(scrollAmount, 0.22, Easings.EASE_OUT_POW2);
-        scrollTimer.tick();
+        // 滚动：可滚动上限 = 内容总高 − 可视内容高（面板高扣掉标题行）。每帧交给 Scroller 重新钳制
+        // + 对齐动画——模块展开/折叠改变内容高度时，偏移会自动收回（照搬 opal 在 render 末尾调 onScroll）。
+        float maxOffset = Math.max(0.0f, totalContentHeight - (panelHeight - 20.0f));
+        scroller.onScroll(maxOffset);
         tooltipTimer.animate(showTooltip ? 1.0 : 0.0, 0.3, Easings.EASE_OUT_POW2);
         tooltipTimer.tick();
-        if (isDragging) {
-            posX = mouseX + dragOffsetX;
-            posY = mouseY + dragOffsetY;
-        }
         collapseTimer.animate(isCollapsed ? 0.0 : 1.0, 0.2, Easings.EASE_OUT_POW2);
         collapseTimer.tick();
         if (!isCollapsed) {
@@ -111,11 +106,13 @@ public class CategoryPanel extends UIElement {
         float shadowSize = 12.0f;
         Renderer.drawRoundedRect(poseStack, posX - shadowSize, posY - shadowSize, 120.0f + shadowSize * 2.0f, panelHeight + shadowSize * 2.0f,
                 6.0f + shadowSize / 2.0f, shadowSize, ColorUtil.fromARGB(0, 0, 0, (int) (80.0f * alpha)));
-        Renderer.drawRoundedRect(poseStack, posX, posY, 120.0f, panelHeight, 6.0f, ColorUtil.withAlpha(BG_COLOR, alpha));
+        // 面板底：明暗主题取色（Dark = 原 23,23,23；Light = 纯白）；外圈阴影保持纯黑不随明暗变化
+        Renderer.drawRoundedRect(poseStack, posX, posY, 120.0f, panelHeight, 6.0f, ThemeHelper.surface(alpha));
         FontStore.AXIFORMA_EXTRABOLD_18.drawString(poseStack, category.displayName,
-                posX + 8.0f, posY + (20.0f - FontStore.AXIFORMA_EXTRABOLD_18.getFontHeight()) / 2.0f + 3.0f, ColorUtil.withAlpha(-1, alpha));
-        float scrollOffset = scrollTimer.getValueF();
-        float elementY = posY + 20.0f - scrollOffset;
+                posX + 8.0f, posY + (20.0f - FontStore.AXIFORMA_EXTRABOLD_18.getFontHeight()) / 2.0f + 3.0f, ThemeHelper.foreground(alpha));
+        float scrollOffset = scroller.getValue();
+        // 偏移为负（opal 约定）：向下滚动 = 内容整体上移
+        float elementY = posY + 20.0f + scrollOffset;
         // scissor 不受 Pose 矩阵影响：模块列表裁剪区域须换算到整体缩放后的屏幕坐标。
         // 注意：要走 pushScissorScreen（输入已含整体缩放系数，仅内部再 ×guiScale），绝不能再用
         // pushScissor，否则双重缩放（×整体系数 又 ×guiScale）会让裁剪矩形失配而溢出。
@@ -131,16 +128,18 @@ public class CategoryPanel extends UIElement {
             moduleElement.render(clickGui, guiGraphics, poseStack, mouseX, mouseY, alpha, partialTicks);
             elementY += moduleElement.getHeight();
         }
+        // 标题栏下方的渐隐（盖住滚上来的行）：由底色向外淡出 —— Dark 黑、Light 白
         Renderer.drawGradientV(poseStack, posX + 0.5f, posY + 20.0f - 0.5f, 119.0f, 6.0f,
-                ColorUtil.withAlpha(-16777216, 0.36f * alpha), ColorUtil.withAlpha(-16777216, 0.0f));
+                ColorUtil.withAlpha(0xFF000000 | ThemeHelper.fadeRgb(), 0.36f * alpha),
+                ColorUtil.withAlpha(0xFF000000 | ThemeHelper.fadeRgb(), 0.0f));
         Renderer.popScissor();
         float tooltipAmount = tooltipTimer.getValueF();
         if (tooltipAmount > 0.0f) {
             float tooltipWidth = FontStore.AXIFORMA_REGULAR_16.getStringWidth(tooltipText);
             Renderer.drawRoundedRect(poseStack, mouseX + 5, mouseY + 5, tooltipWidth + 6.0f,
-                    FontStore.AXIFORMA_REGULAR_16.getFontHeight() + 4.0f, 3.0f, ColorUtil.withAlpha(BG_COLOR, alpha * tooltipAmount));
+                    FontStore.AXIFORMA_REGULAR_16.getFontHeight() + 4.0f, 3.0f, ThemeHelper.surface(alpha * tooltipAmount));
             FontStore.AXIFORMA_REGULAR_16.drawString(poseStack, tooltipText, mouseX + 5 + 3, mouseY + 5 + 1,
-                    ColorUtil.withAlpha(-1, alpha * tooltipAmount));
+                    ThemeHelper.foreground(alpha * tooltipAmount));
         }
         RenderHelper.popPose(poseStack);
     }
@@ -151,43 +150,33 @@ public class CategoryPanel extends UIElement {
         scaleTimer.setCurrentValue(0.0);
     }
 
+    /** 命中查询：面板包围框内（鼠标坐标已换算到未缩放空间）。 */
     @Override
-    public boolean mouseClicked(double mouseX, double mouseY, int button) {
-        if (isHovered) {
-            if (CursorUtil.isInBounds((float) mouseX, (float) mouseY, posX, posY, 120.0f, 20.0f)) {
-                isDragging = true;
-                dragOffsetX = posX - (float) mouseX;
-                dragOffsetY = posY - (float) mouseY;
-            } else if (CursorUtil.isInBounds((float) mouseX, (float) mouseY, posX, posY + 20.0f, 120.0f, panelHeight - 20.0f)) {
-                for (ModuleElement moduleElement : moduleElements) {
-                    if (moduleElement.mouseClicked(mouseX, mouseY, button)) {
-                        return true;
-                    }
-                }
-            }
-            return true;
-        }
-        return false;
+    public boolean contains(double mouseX, double mouseY) {
+        return CursorUtil.isInBounds((float) mouseX, (float) mouseY, posX, posY, 120.0f, panelHeight);
     }
 
-    @Override
-    public boolean mouseReleased(double mouseX, double mouseY, int button) {
+    /** 标题栏命中（可作为拖动抓取区）。 */
+    public boolean titleContains(double mouseX, double mouseY) {
+        return CursorUtil.isInBounds((float) mouseX, (float) mouseY, posX, posY, 120.0f, 20.0f);
+    }
+
+    /** 模块列表区域命中（标题栏以下到面板底）。 */
+    public boolean listContains(double mouseX, double mouseY) {
+        return CursorUtil.isInBounds((float) mouseX, (float) mouseY, posX, posY + 20.0f, 120.0f, panelHeight - 20.0f);
+    }
+
+    /** 滚轮：命中本面板则累加一格滚动（照搬 opal：先现算内容总高与滚动上限，再 addScroll）。 */
+    public boolean scrollBy(double mouseX, double mouseY, double scrollDelta) {
+        if (!contains(mouseX, mouseY)) {
+            return false;
+        }
+        float totalContentHeight = 0.0f;
         for (ModuleElement moduleElement : moduleElements) {
-            if (moduleElement.mouseReleased(mouseX, mouseY, button)) {
-                return true;
-            }
+            totalContentHeight += moduleElement.getHeight();
         }
-        isDragging = false;
+        scroller.addScroll(scrollDelta, Math.max(0.0f, totalContentHeight - (panelHeight - 20.0f)));
         return true;
-    }
-
-    @Override
-    public boolean mouseScrolled(double mouseX, double mouseY, double scrollDelta) {
-        if (isHovered) {
-            scrollAmount -= (float) scrollDelta * 50.0f;
-            return true;
-        }
-        return false;
     }
 
     public List<ModuleElement> getModuleElements() {
@@ -200,10 +189,6 @@ public class CategoryPanel extends UIElement {
 
     public boolean isHovered() {
         return isHovered;
-    }
-
-    public boolean isDragging() {
-        return isDragging;
     }
 
     public SettingElement<?> getHoveredSettingElement() {

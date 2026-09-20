@@ -1,75 +1,90 @@
 package xxliam.cookieclient.modules.impl.movement;
 
-import com.mojang.blaze3d.platform.InputConstants;
 import net.minecraft.client.Minecraft;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction;
-import net.minecraft.network.protocol.Packet;
-import net.minecraft.network.protocol.game.ClientboundSetEntityMotionPacket;
+import net.minecraft.network.protocol.game.ServerboundSwingPacket;
 import net.minecraft.world.InteractionHand;
 import net.minecraft.world.InteractionResult;
 import net.minecraft.world.item.BlockItem;
 import net.minecraft.world.item.ItemStack;
-import net.minecraft.world.level.block.AirBlock;
 import net.minecraft.world.level.block.state.BlockState;
+import net.minecraft.world.phys.AABB;
 import net.minecraft.world.phys.BlockHitResult;
 import net.minecraft.world.phys.HitResult;
 import net.minecraft.world.phys.Vec3;
-import org.apache.commons.lang3.RandomUtils;
+import net.minecraft.world.phys.shapes.CollisionContext;
 import xxliam.cookieclient.modules.Category;
 import xxliam.cookieclient.modules.Module;
 import xxliam.cookieclient.settings.impl.BooleanSetting;
-import xxliam.cookieclient.settings.impl.NumberSetting;
+import xxliam.cookieclient.settings.impl.ModeSetting;
 import xxliam.cookieclient.utils.game.BlockUtil;
-import xxliam.cookieclient.utils.game.MotionSimulator;
-import xxliam.cookieclient.utils.game.MovementUtil;
 import xxliam.cookieclient.utils.game.RayTraceUtil;
 import xxliam.cookieclient.utils.math.MathUtil;
 import xxliam.cookieclient.utils.rotation.Rotation;
 import xxliam.cookieclient.utils.rotation.RotationHandler;
 import xxliam.cookieclient.utils.rotation.RotationUtil;
 
+import java.util.ArrayList;
 import java.util.Comparator;
-import java.util.HashSet;
-import java.util.PriorityQueue;
+import java.util.List;
+import java.util.random.RandomGenerator;
 
 /**
- * Scaffold：自动搭路（Normal 模式）。
+ * Scaffold：自动搭路 —— LiquidBounce {@code ModuleScaffold} + {@code ScaffoldNormalTechnique} 移植。
  * <p>
- * 旋转由 {@code LocalPlayerMixin} 在发包时应用，收包由 {@code ConnectionMixin} 驱动。
+ * 核心管线（照搬 LB Normal）：
+ * <ol>
+ *   <li>预测位置 = 当前位置 + 当前速度（LB {@code ScaffoldMovementPrediction} 的单 tick 简化）；</li>
+ *   <li>目标搜索：对 {@code BlockPosOffsets.NORMAL} 偏移表（xz ∈ {0,±1} × y ∈ {0,-1}，按离预测
+ *       位置平方距离升序）逐格考察 —— 空格/流体 → 点击相邻实心块的面（PLACE_AT_NEIGHBOR）；
+ *       可替换方块（雪层等）→ 直接往里放（REPLACE）；按「面中心与当前旋转的角差」选最优面，
+ *       并剔除背对玩家的面（LB 的 cosine &gt; 0 判定）；</li>
+ *   <li>面向点：碰撞箱轴对齐面 → 上部面截到 y≤0.6（LB 方便从整块切半砖）→
+ *       {@code trimFace}（四边各收 15%）→ 按 Rotation Mode 产出点 → 面底缘记为
+ *       {@code minPlacementY}（十字准星命中点不得低于它）；</li>
+ *   <li>旋转 NORMAL 时机：找到目标即 {@code RotationHandler.setTargetRotation}（由
+ *       LocalPlayerMixin 在发包时应用）；</li>
+ *   <li>放置：用当前旋转做十字准星射线，命中块 / 面 / 点高度三重匹配后才 {@code useItemOn}
+ *       （对应 LB {@code doesCrosshairTargetMatchRequirements}），成功后按 Swing 模式挥手。</li>
+ * </ol>
+ * <p>
+ * Swing 四档逐字照搬 LB {@code SwingMode}：
+ * <pre>
+ *   DoNotHide     player.swing(hand)                 —— 客户端动画 + 服务端包（原版行为）
+ *   HideForBoth   无                                 —— 双端都不挥
+ *   HideForClient 仅发 ServerboundSwingPacket         —— 服务端挥、客户端无动画
+ *   HideForServer player.swing(hand, false)          —— 客户端动画、不发服务端包
+ * </pre>
+ * <p>
+ * 与 LB 的差异（刻意裁剪 / 语义等价，均已确认）：①未移植 Telly/Eagle/Down/Ceiling/
+ * HeadHitter/Tower/SameY —— 本轮只要求 Normal + Swing；②Rotation Mode 只移植
+ * Center / Random / Stabilized / NearestRotation 四档（LB 另有 ReverseYaw / DiagonalYaw /
+ * AngleYaw / EdgePoint，依赖 LB 的平面-线段求交几何库）；③Stabilized 的面向区域裁剪用
+ * 「玩家位置 + 水平速度方向」直线等价替代 LB 的移动规划器最优线；④移动预测为单 tick 速度外推；
+ * ⑤LB「面到旋转线的最近点」按「射线与面所在平面求交 + 钳制到面矩形」实现（线与平面相交时二者等价）。
  */
 public class Scaffold extends Module {
 
     public static Scaffold INSTANCE;
 
-    public final BooleanSetting eagle = new BooleanSetting("Eagle", true);
-    public final BooleanSetting sneak = new BooleanSetting("Sneak", true);
-    public final BooleanSetting snap = new BooleanSetting("Snap", true);
-    public final NumberSetting rotationTick = new NumberSetting("Rotation Tick", 3, 1, 6, 1);
-    public final BooleanSetting clutch = new BooleanSetting("Clutch", true);
+    public final ModeSetting rotationMode = new ModeSetting("Rotation Mode",
+            "Stabilized", "Center", "Random", "NearestRotation").withDefault("Stabilized");
+    public final BooleanSetting requiresSight = new BooleanSetting("Requires Sight", false);
+    public final ModeSetting swingMode = new ModeSetting("Swing",
+            "DoNotHide", "HideForBoth", "HideForClient", "HideForServer").withDefault("DoNotHide");
 
-    public Rotation correctRotation = new Rotation();
-    public Rotation rots = new Rotation();
-    public Rotation lastRots = new Rotation();
-    public int targetYLevel = -1;
-    public int velocityDelay = 0;
+    private static final RandomGenerator RANDOM = new java.util.Random();
 
     private int oldSlot;
-    private PlacementTarget currentPlacement;
-    private int eagleTimer;
-    private int groundTicks = 0;
-    private int airTicks = 0;
-    private int rotationDelay = 0;
-    private boolean canBuildNow;
+    private Target currentTarget;
 
     public Scaffold() {
         super("Scaffold", Category.MOVEMENT);
         INSTANCE = this;
-        addSetting(eagle);
-        addSetting(sneak);
-        addSetting(snap);
-        addSetting(rotationTick);
-        addSetting(clutch);
+        addSetting(rotationMode);
+        addSetting(requiresSight);
+        addSetting(swingMode);
     }
 
     @Override
@@ -77,13 +92,8 @@ public class Scaffold extends Module {
         Minecraft mc = Minecraft.getInstance();
         if (mc.player != null) {
             oldSlot = mc.player.getInventory().selected;
-            rots.setYawPitch(mc.player.getYRot() - 180.0f, mc.player.getXRot());
-            lastRots.setYawPitch(mc.player.yRotO - 180.0f, mc.player.xRotO);
-            currentPlacement = null;
-            targetYLevel = 10000;
-            velocityDelay = 0;
-            canBuildNow = true;
         }
+        currentTarget = null;
         super.onEnable();
     }
 
@@ -91,349 +101,470 @@ public class Scaffold extends Module {
     protected void onDisable() {
         Minecraft mc = Minecraft.getInstance();
         if (mc != null && mc.player != null) {
-            boolean jumpDown = InputConstants.isKeyDown(mc.getWindow().getWindow(), mc.options.keyJump.getDefaultKey().getValue());
-            boolean shiftDown = InputConstants.isKeyDown(mc.getWindow().getWindow(), mc.options.keyShift.getDefaultKey().getValue());
-            mc.options.keyJump.setDown(jumpDown);
-            mc.options.keyShift.setDown(shiftDown);
-            mc.options.keyUse.setDown(false);
             mc.player.getInventory().selected = oldSlot;
-            canBuildNow = true;
-            RotationHandler.isRotating = false;
         }
+        currentTarget = null;
+        RotationHandler.isRotating = false;
         super.onDisable();
-    }
-
-    /** 收包：检测速度包（离合器用）。由 ConnectionMixin 调用。 */
-    public static void onPacketReceive(Packet<?> packet) {
-        if (INSTANCE == null || !INSTANCE.isEnabled()) {
-            return;
-        }
-        Minecraft mc = Minecraft.getInstance();
-        if (mc.player == null || mc.level == null) {
-            return;
-        }
-        if (packet instanceof ClientboundSetEntityMotionPacket motion && motion.getId() == mc.player.getId()) {
-            double length = new Vec3(motion.getXa() / 8000.0, 0.0, motion.getZa() / 8000.0).length();
-            if (length >= 1.5) {
-                INSTANCE.velocityDelay = 60;
-            }
-        }
     }
 
     @Override
     public void onTick() {
         Minecraft mc = Minecraft.getInstance();
-        if (mc.player == null) {
+        if (mc.player == null || mc.level == null || mc.gameMode == null) {
             return;
         }
-        // 统计地面/空中 tick
-        if (mc.player.onGround()) {
-            airTicks = 0;
-            groundTicks++;
-        } else {
-            groundTicks = 0;
-            airTicks++;
-        }
-        if (velocityDelay > 0) {
-            velocityDelay--;
-        }
-        if (mc.player.onGround() && velocityDelay <= 30) {
-            velocityDelay = 0;
+        if (mc.player.isUsingItem()) {
+            return;
         }
 
-        int placeableSlot = -1;
+        autoSwitchToBlock(mc);
+
+        // LB 用移动预测器，这里单 tick 速度外推
+        Vec3 predictedPos = mc.player.position().add(mc.player.getDeltaMovement());
+        currentTarget = findPlacementTarget(predictedPos);
+
+        if (currentTarget != null) {
+            RotationHandler.isRotating = true;
+            RotationHandler.setTargetRotation(currentTarget.rotation());
+        } else {
+            RotationHandler.isRotating = false;
+        }
+
+        placeIfCrosshairValid(mc);
+    }
+
+    /** 找到快捷栏第一个可用方块堆就切过去（LB 由 AutoBlock 静默选块，这里沿用旧实现的直接切换）。 */
+    private void autoSwitchToBlock(Minecraft mc) {
         for (int i = 0; i < 9; i++) {
             ItemStack stack = mc.player.getInventory().getItem(i);
             if (stack.getItem() instanceof BlockItem && BlockUtil.isPlaceable(stack)) {
-                placeableSlot = i;
-                break;
-            }
-        }
-        if (placeableSlot != -1 && mc.player.getInventory().selected != placeableSlot) {
-            mc.player.getInventory().selected = placeableSlot;
-        }
-
-        boolean jumpHeld = InputConstants.isKeyDown(mc.getWindow().getWindow(), mc.options.keyJump.getDefaultKey().getValue());
-        if (targetYLevel == -1
-                || targetYLevel > (int) Math.floor(mc.player.getY()) - 1
-                || mc.player.onGround()
-                || !MovementUtil.isMoving()
-                || jumpHeld) {
-            targetYLevel = (int) Math.floor(mc.player.getY()) - 1;
-        }
-
-        applyRotations();
-        canBuildNow = true;
-        if (currentPlacement != null && placeableSlot != -1) {
-            if (clutch.getValue() && mc.player.getDeltaMovement().y < -0.1) {
-                MotionSimulator sim = new MotionSimulator(mc.player);
-                sim.simulateWithFriction(2);
-                if (currentPlacement.position.getY() > sim.y) {
-                    canBuildNow = false;
+                if (mc.player.getInventory().selected != i) {
+                    mc.player.getInventory().selected = i;
                 }
+                return;
             }
         }
-        if (mc.player.onGround()) {
-            canBuildNow = true;
-        }
-        correctRotation = getPlayerYawRotation();
+    }
 
-        if (currentPlacement == null) {
-            // 无目标
-        } else if (clutch.getValue() && (!canBuildNow || velocityDelay > 0) && rotationDelay <= 8) {
-            Rotation rotationToBlock = RotationUtil.rotationToBlock(currentPlacement.position, 1.0f);
-            rots.setYawPitch(rotationToBlock.getYaw(), rotationToBlock.getPitch());
-            rotationDelay++;
-        } else {
-            canBuildNow = true;
-            rotationDelay = 0;
-            if (snap.getValue()) {
-                rots.setYaw(correctRotation.getYaw());
-            } else {
-                rots.setYaw(RotationUtil.moveTowards((float) getBlockDistance(), rots.getYaw(), correctRotation.getYaw()));
+    // ------------------------------------------------------------------
+    // 目标搜索（LB TargetFinding.findBestBlockPlacementTarget 的 NORMAL 偏移路径）
+    // ------------------------------------------------------------------
+
+    private Target findPlacementTarget(Vec3 predictedPos) {
+        Minecraft mc = Minecraft.getInstance();
+        Vec3 eyePos = mc.player.getEyePosition();
+        // LB getTargetedPosition：SameY=Off 默认 → 站位方块向下一格
+        BlockPos base = BlockPos.containing(predictedPos.x, predictedPos.y, predictedPos.z).below();
+
+        for (BlockPos targetPos : normalOffsetsSorted(base, predictedPos)) {
+            BlockState targetState = mc.level.getBlockState(targetPos);
+            if (isSolidForPlacement(targetState, targetPos)) {
+                continue;
             }
-            rots.setPitch(correctRotation.getPitch());
-            if (sneak.getValue()) {
-                eagleTimer++;
-                if (eagleTimer == 18) {
-                    if (mc.player.isSprinting()) {
-                        mc.options.keySprint.setDown(false);
-                        mc.player.setSprinting(false);
-                    }
-                    mc.options.keyShift.setDown(true);
-                } else if (eagleTimer >= 21) {
-                    mc.options.keyShift.setDown(false);
-                    eagleTimer = 0;
+            boolean placeAtNeighbor = targetState.isAir() || !targetState.getFluidState().isEmpty();
+            if (!placeAtNeighbor && !targetState.canBeReplaced()) {
+                continue;
+            }
+
+            Direction bestDirection = null;
+            double bestDelta = Double.MAX_VALUE;
+            BlockPos bestNeighbor = null;
+            for (Direction direction : Direction.values()) {
+                // PLACE_AT_NEIGHBOR：点击目标格旁的实心块；REPLACE：直接点可替换块自身
+                BlockPos neighbor = placeAtNeighbor
+                        ? targetPos.relative(direction.getOpposite())
+                        : targetPos;
+                BlockState neighborState = mc.level.getBlockState(neighbor);
+                if (neighborState.canBeReplaced()) {
+                    continue; // 邻块可被替换（草/花）→ 点它放不出方块
                 }
-            }
-            if (eagle.getValue()) {
-                mc.options.keyShift.setDown(mc.player.onGround() && isOnBlockEdge(0.3f));
-            }
-            if (snap.getValue() && !jumpHeld) {
-                resetSnap();
-            }
-        }
-        lastRots.setYawPitch(rots.getYaw(), rots.getPitch());
-
-        // 设置目标旋转 + 放置方块
-        RotationHandler.isRotating = true;
-        RotationHandler.setTargetRotation(rots.clone());
-        doSnap();
-    }
-
-    private double getBlockDistance() {
-        double base = Math.max(60.0, 360.0 / rotationTick.getValue().doubleValue());
-        return Math.max(base, 180.0);
-    }
-
-    private void doSnap() {
-        Minecraft mc = Minecraft.getInstance();
-        if (currentPlacement == null || mc.player == null || mc.gameMode == null) {
-            return;
-        }
-        if (!BlockUtil.isPlaceable(mc.player.getMainHandItem())) {
-            return;
-        }
-        Direction facing = currentPlacement.facing;
-        if (facing == null) {
-            return;
-        }
-        boolean jumpHeld = InputConstants.isKeyDown(mc.getWindow().getWindow(), mc.options.keyJump.getDefaultKey().getValue());
-        if (facing == Direction.UP && !mc.player.onGround() && MovementUtil.isMoving() && !jumpHeld) {
-            return;
-        }
-        if (!shouldBuild()) {
-            return;
-        }
-        BlockHitResult hit = new BlockHitResult(getHitVec(currentPlacement.position, facing), facing, currentPlacement.position, false);
-        InteractionResult result = mc.gameMode.useItemOn(mc.player, InteractionHand.MAIN_HAND, hit);
-        if (result == InteractionResult.SUCCESS) {
-            mc.player.swing(InteractionHand.MAIN_HAND);
-        }
-    }
-
-    public static boolean isOnBlockEdge(float inflate) {
-        Minecraft mc = Minecraft.getInstance();
-        if (mc.level == null || mc.player == null) {
-            return false;
-        }
-        return !mc.level.getCollisions(mc.player,
-                mc.player.getBoundingBox().move(0.0, -0.5, 0.0).inflate(-inflate, 0.0, -inflate))
-                .iterator().hasNext();
-    }
-
-    public static Vec3 getHitVec(BlockPos pos, Direction direction) {
-        double x = pos.getX() + 0.5;
-        double y = pos.getY() + 0.5;
-        double z = pos.getZ() + 0.5;
-        if (direction != Direction.UP && direction != Direction.DOWN) {
-            y += MathUtil.randomDouble(0.3, -0.3);
-        } else {
-            x += MathUtil.randomDouble(0.3, -0.3);
-            z += MathUtil.randomDouble(0.3, -0.3);
-        }
-        if (direction == Direction.WEST || direction == Direction.EAST) {
-            z += MathUtil.randomDouble(0.3, -0.3);
-        }
-        if (direction == Direction.SOUTH || direction == Direction.NORTH) {
-            x += MathUtil.randomDouble(0.3, -0.3);
-        }
-        return new Vec3(x, y, z);
-    }
-
-    private PlacementTarget findPlacementTarget(BlockPos origin) {
-        Minecraft mc = Minecraft.getInstance();
-        Direction[] directions = {Direction.DOWN, Direction.EAST, Direction.WEST, Direction.NORTH, Direction.SOUTH, Direction.UP};
-        PriorityQueue<PlacementCandidate> queue = new PriorityQueue<>(Comparator.comparingDouble(c ->
-                Math.abs(c.pos.getX() - origin.getX()) + Math.abs(c.pos.getY() - origin.getY()) + Math.abs(c.pos.getZ() - origin.getZ())));
-        HashSet<BlockPos> visited = new HashSet<>();
-        queue.offer(new PlacementCandidate(origin, null, 0));
-        visited.add(origin);
-        double maxDistance = 4.5;
-        while (!queue.isEmpty()) {
-            PlacementCandidate candidate = queue.poll();
-            for (Direction direction : directions) {
-                BlockPos neighbor = candidate.pos.relative(direction);
-                if (visited.contains(neighbor)) {
+                Vec3 sideCenter = Vec3.atCenterOf(neighbor).add(
+                        direction.getStepX() * 0.5, direction.getStepY() * 0.5, direction.getStepZ() * 0.5);
+                // 背面剔除（LB calculateAngleToPlayerEyeCosine < 0 剔除）
+                Vec3 eyeToFace = eyePos.subtract(sideCenter);
+                if (eyeToFace.lengthSqr() < 1.0e-8) {
                     continue;
                 }
-                double distance = Math.abs(neighbor.getX() - origin.getX()) + Math.abs(neighbor.getY() - origin.getY()) + Math.abs(neighbor.getZ() - origin.getZ());
-                if (distance > maxDistance) {
+                double cosine = eyeToFace.normalize().dot(
+                        new Vec3(direction.getStepX(), direction.getStepY(), direction.getStepZ()));
+                if (cosine <= 0.0) {
                     continue;
                 }
-                visited.add(neighbor);
-                if (isValidBlock(neighbor)) {
-                    Direction face = direction == Direction.DOWN ? Direction.UP : direction.getOpposite();
-                    if (mc.level.getBlockState(neighbor).entityCanStandOnFace(mc.level, neighbor, mc.player, face)) {
-                        return new PlacementTarget(neighbor, face);
-                    }
-                } else if (candidate.depth < 3) {
-                    queue.offer(new PlacementCandidate(neighbor, direction, candidate.depth + 1));
+                double delta = rotationDelta(RotationUtil.rotationTo(eyePos, sideCenter));
+                if (delta < bestDelta) {
+                    bestDelta = delta;
+                    bestDirection = direction;
+                    bestNeighbor = neighbor;
                 }
+            }
+            if (bestDirection == null) {
+                continue;
+            }
+
+            Target target = buildTarget(bestNeighbor, targetPos, bestDirection, eyePos);
+            if (target != null) {
+                return target;
             }
         }
         return null;
     }
 
-    private boolean isValidBlock(BlockPos pos) {
+    /** BlockPosOffsets.NORMAL：xz ∈ {0,-1,1} × y ∈ {0,-1}，按「块中心到预测位置」平方距离升序。 */
+    private List<BlockPos> normalOffsetsSorted(BlockPos base, Vec3 predictedPos) {
         Minecraft mc = Minecraft.getInstance();
-        if (mc.level == null || mc.level.isOutsideBuildHeight(pos)) {
-            return false;
-        }
-        BlockState state = mc.level.getBlockState(pos);
-        if (!BlockUtil.isSolid(state) || state.isAir()) {
-            return false;
-        }
-        if (pos.getY() > targetYLevel + 1.0) {
-            return false;
-        }
-        return !state.getCollisionShape(mc.level, pos).isEmpty();
-    }
-
-    private Rotation getPlayerYawRotation() {
-        Minecraft mc = Minecraft.getInstance();
-        if (mc.player == null || currentPlacement == null) {
-            return new Rotation();
-        }
-        return RotationUtil.rotationToBlock(currentPlacement.position, 0.0f);
-    }
-
-    private void applyRotations() {
-        Minecraft mc = Minecraft.getInstance();
-        if (mc.player == null || mc.level == null) {
-            return;
-        }
-        Vec3 eye = mc.player.getEyePosition();
-        if (!canBuildNow) {
-            eye = mc.player.getEyePosition().add(mc.player.getDeltaMovement().multiply(2.0, 2.0, 2.0));
-        }
-        if (clutch.getValue() && mc.player.getDeltaMovement().y < 0.01) {
-            MotionSimulator sim = new MotionSimulator(mc.player);
-            sim.simulateWithFriction(2);
-            eye = new Vec3(eye.x, Math.max(sim.y + mc.player.getEyeHeight(), eye.y), eye.z);
-        }
-        BlockPos belowFeet = BlockPos.containing(eye.x, targetYLevel + 0.1f, eye.z);
-        int feetX = belowFeet.getX();
-        int feetZ = belowFeet.getZ();
-        if (mc.level.getBlockState(belowFeet).entityCanStandOn(mc.level, belowFeet, mc.player)) {
-            return;
-        }
-        if (isAbovePlaceable(eye, belowFeet)) {
-            return;
-        }
-        for (int radius = 1; radius <= 6; radius++) {
-            if (isAbovePlaceable(eye, new BlockPos(feetX, targetYLevel - radius, feetZ))) {
-                return;
-            }
-            for (int x = 1; x <= radius; x++) {
-                for (int z = 0; z <= radius - x; z++) {
-                    int yOff = radius - x - z;
-                    for (int signX = 0; signX <= 1; signX++) {
-                        for (int signZ = 0; signZ <= 1; signZ++) {
-                            BlockPos test = new BlockPos(feetX + (signX == 0 ? x : -x), targetYLevel - yOff, feetZ + (signZ == 0 ? z : -z));
-                            if (isAbovePlaceable(eye, test)) {
-                                return;
-                            }
-                        }
+        List<BlockPos> offsets = new ArrayList<>(18);
+        for (int x : new int[]{0, -1, 1}) {
+            for (int z : new int[]{0, -1, 1}) {
+                for (int y : new int[]{0, -1}) {
+                    BlockPos pos = base.offset(x, y, z);
+                    if (mc.level.isOutsideBuildHeight(pos)) {
+                        continue;
                     }
+                    offsets.add(pos);
                 }
             }
         }
+        offsets.sort(Comparator.comparingDouble(pos ->
+                Vec3.atCenterOf(pos).distanceToSqr(predictedPos)));
+        return offsets;
     }
 
-    private boolean isAbovePlaceable(Vec3 from, BlockPos pos) {
+    /** 在选中面上找放置点并生成最终旋转（LB findTargetPointOnFace + BlockPlacementTarget）。 */
+    private Target buildTarget(BlockPos neighbor, BlockPos targetPos, Direction direction, Vec3 eyePos) {
         Minecraft mc = Minecraft.getInstance();
-        if (mc.level == null || mc.player == null) {
-            return false;
+        BlockState neighborState = mc.level.getBlockState(neighbor);
+        List<AABB> shapes = neighborState.getShape(mc.level, neighbor, CollisionContext.of(mc.player)).toAabbs();
+        if (shapes.isEmpty()) {
+            return null;
         }
-        if (!(mc.level.getBlockState(pos).getBlock() instanceof AirBlock)) {
-            return false;
+
+        Target best = null;
+        double bestCenteredness = Double.MAX_VALUE;
+        double bestFromY = -Double.MAX_VALUE;
+        for (AABB shape : shapes) {
+            Face face = alignedFace(shape, direction);
+            Face working = face;
+            // LB：上半部分的面截到 y≤0.6，方便从整块切到半砖/台阶
+            if (working.localMaxY() >= 0.9) {
+                Face truncated = working.truncateY(0.6);
+                if (truncated != null) {
+                    working = truncated;
+                }
+            }
+            working = working.trimmed();
+            Vec3 interactionPoint = producePositionOnFace(working, direction, neighbor);
+            if (interactionPoint == null) {
+                continue;
+            }
+            // LB COMPARATOR_POINT_ON_FACE：点越贴面心越好（沿法线轴度量），其次点越高
+            Vec3 centered = interactionPoint.subtract(Vec3.atCenterOf(neighbor))
+                    .multiply(direction.getStepX(), direction.getStepY(), direction.getStepZ());
+            double centeredness = centered.lengthSqr();
+            if (best == null || centeredness < bestCenteredness
+                    || (centeredness == bestCenteredness && face.localMinY() > bestFromY)) {
+                bestCenteredness = centeredness;
+                bestFromY = face.localMinY();
+                Rotation rotation = RotationUtil.rotationTo(eyePos, interactionPoint);
+                best = new Target(neighbor, targetPos, direction, interactionPoint,
+                        face.localMinY() + neighbor.getY(), rotation);
+            }
         }
-        Vec3 center = new Vec3(pos.getX() + 0.5, pos.getY() + 0.5f, pos.getZ() + 0.5);
-        for (Direction direction : Direction.values()) {
-            Vec3 offsetCenter = center.add(new Vec3(direction.getNormal().getX() * 0.5, direction.getNormal().getY() * 0.5, direction.getNormal().getZ() * 0.5));
-            BlockPos offset = pos.offset(direction.getNormal());
-            if (mc.level.getBlockState(offset).entityCanStandOnFace(mc.level, offset, mc.player, direction)) {
-                Vec3 delta = offsetCenter.subtract(from);
-                if (delta.lengthSqr() <= 20.25 && delta.normalize().dot(Vec3.atLowerCornerOf(direction.getNormal()).normalize()) >= 0.0) {
-                    currentPlacement = new PlacementTarget(new BlockPos(offset.getX(), offset.getY(), offset.getZ()), direction.getOpposite());
-                    return true;
+        return best;
+    }
+
+    // ------------------------------------------------------------------
+    // 面向点工厂（LB FaceTargetPositionFactory）
+    // ------------------------------------------------------------------
+
+    private Vec3 producePositionOnFace(Face face, Direction direction, BlockPos targetPos) {
+        return switch (rotationMode.getValue()) {
+            case "Center" -> face.worldCenter(targetPos);
+            case "Random" -> face.worldRandomPoint(targetPos);
+            case "NearestRotation" -> nearestPointToRotationLine(face, targetPos);
+            default -> produceStabilized(face, direction, targetPos); // Stabilized（LB 默认）
+        };
+    }
+
+    /**
+     * Stabilized：先用移动方向裁剪面向区域（LB 用移动规划器最优线，这里用「玩家位置 +
+     * 水平速度方向」直线等价），再取当前旋转射线与面的交点。
+     */
+    private Vec3 produceStabilized(Face face, Direction direction, BlockPos targetPos) {
+        Minecraft mc = Minecraft.getInstance();
+        Vec3 velocity = mc.player.getDeltaMovement();
+        Vec3 horizontal = new Vec3(velocity.x, 0.0, velocity.z);
+        Face working = face;
+        if (horizontal.lengthSqr() > 0.001 * 0.001) {
+            Vec3 dir = horizontal.normalize();
+            double planeFixed = face.worldFixed(targetPos);
+            Double t = rayPlaneT(mc.player.position(), dir, planeFixed, face.axis());
+            if (t != null) {
+                Vec3 intersect = mc.player.position().add(dir.scale(t));
+                Vec3 ahead = mc.player.position().add(dir.scale(2.0));
+                AABB cropBox = new AABB(
+                        Math.min(intersect.x, ahead.x), mc.player.getY() - 2.0, Math.min(intersect.z, ahead.z),
+                        Math.max(intersect.x, ahead.x), mc.player.getY() + 1.0, Math.max(intersect.z, ahead.z));
+                Face clamped = face.clampToWorldBox(cropBox, targetPos);
+                // LB：裁完剩太少就不采样，直接用未裁剪面
+                if (clamped != null && clamped.area() >= 0.0001) {
+                    working = clamped;
                 }
             }
         }
-        return false;
+        return nearestPointToRotationLine(working, targetPos);
     }
 
-    private boolean shouldBuild() {
-        Minecraft mc = Minecraft.getInstance();
-        if (mc.player == null || mc.level == null) {
-            return false;
+    /**
+     * 当前旋转射线与面的交点（钳制到面矩形内）。
+     * LB {@code face.nearestPointTo(rotationLine)} 的语义等价：射线与面平面相交时二者一致。
+     */
+    private Vec3 nearestPointToRotationLine(Face face, BlockPos targetPos) {
+        Rotation baseline = currentRotationBaseline();
+        Vec3 dir = RayTraceUtil.getViewVector(baseline.getPitch(), baseline.getYaw());
+        Vec3 eye = Minecraft.getInstance().player.getEyePosition();
+        Double t = rayPlaneT(eye, dir, face.worldFixed(targetPos), face.axis());
+        Vec3 point = t == null ? face.worldCenter(targetPos) : eye.add(dir.scale(t));
+        return new Vec3(
+                MathUtil.clamp(point.x, face.worldMinX(targetPos), face.worldMaxX(targetPos)),
+                MathUtil.clamp(point.y, face.worldMinY(targetPos), face.worldMaxY(targetPos)),
+                MathUtil.clamp(point.z, face.worldMinZ(targetPos), face.worldMaxZ(targetPos)));
+    }
+
+    private Rotation currentRotationBaseline() {
+        if (RotationHandler.isRotating && RotationHandler.targetRotation != null) {
+            return RotationHandler.targetRotation;
         }
-        BlockPos below = BlockPos.containing(mc.player.getX(), mc.player.getY() - 0.5, mc.player.getZ());
-        return mc.level.isEmptyBlock(below) && BlockUtil.isPlaceable(mc.player.getMainHandItem());
+        Minecraft mc = Minecraft.getInstance();
+        return new Rotation(mc.player.getYRot(), mc.player.getXRot());
     }
 
-    private void resetSnap() {
-        Minecraft mc = Minecraft.getInstance();
-        if (mc.player == null || currentPlacement == null) {
+    private double rotationDelta(Rotation target) {
+        Rotation current = currentRotationBaseline();
+        double dy = RotationUtil.angleDiffDouble(current.getYaw(), target.getYaw());
+        double dp = current.getPitch() - target.getPitch();
+        return Math.sqrt(dy * dy + (double) dp * dp);
+    }
+
+    // ------------------------------------------------------------------
+    // 面几何（LB AlignedFace 的轴对齐简化）
+    // ------------------------------------------------------------------
+
+    /** 抽出碰撞箱在 direction 侧的轴对齐面矩形（块局部坐标）。 */
+    private Face alignedFace(AABB shape, Direction direction) {
+        return switch (direction) {
+            case DOWN -> new Face(shape.minX, shape.minZ, shape.maxX, shape.maxZ, Axis.Y, shape.minY);
+            case UP -> new Face(shape.minX, shape.minZ, shape.maxX, shape.maxZ, Axis.Y, shape.maxY);
+            case NORTH -> new Face(shape.minX, shape.minY, shape.maxX, shape.maxY, Axis.Z, shape.minZ);
+            case SOUTH -> new Face(shape.minX, shape.minY, shape.maxX, shape.maxY, Axis.Z, shape.maxZ);
+            case WEST -> new Face(shape.minY, shape.minZ, shape.maxY, shape.maxZ, Axis.X, shape.minX);
+            case EAST -> new Face(shape.minY, shape.minZ, shape.maxY, shape.maxZ, Axis.X, shape.maxX);
+        };
+    }
+
+    private enum Axis {X, Y, Z}
+
+    /**
+     * 轴对齐面矩形（块局部坐标）。u/v = 面内两个自由轴的坐标范围，
+     * fixedAxis/fixedValue = 法线轴固定坐标。X 面 → u=Y、v=Z；Y 面 → u=X、v=Z；Z 面 → u=X、v=Y。
+     * worldMinX..worldMaxZ 系列按 X/Y/Z 世界轴给出（含方块坐标偏移）。
+     */
+    private record Face(double uFrom, double vFrom, double uTo, double vTo, Axis axis, double fixedValue) {
+
+        double worldMinX(BlockPos pos) {
+            return pos.getX() + (axis == Axis.X ? fixedValue : uFrom);
+        }
+
+        double worldMaxX(BlockPos pos) {
+            return pos.getX() + (axis == Axis.X ? fixedValue : uTo);
+        }
+
+        double worldMinY(BlockPos pos) {
+            return pos.getY() + (axis == Axis.Y ? fixedValue : (axis == Axis.X ? uFrom : vFrom));
+        }
+
+        double worldMaxY(BlockPos pos) {
+            return pos.getY() + (axis == Axis.Y ? fixedValue : (axis == Axis.X ? uTo : vTo));
+        }
+
+        double worldMinZ(BlockPos pos) {
+            return pos.getZ() + (axis == Axis.Z ? fixedValue : vFrom);
+        }
+
+        double worldMaxZ(BlockPos pos) {
+            return pos.getZ() + (axis == Axis.Z ? fixedValue : vTo);
+        }
+
+        double worldFixed(BlockPos pos) {
+            return switch (axis) {
+                case X -> pos.getX() + fixedValue;
+                case Y -> pos.getY() + fixedValue;
+                case Z -> pos.getZ() + fixedValue;
+            };
+        }
+
+        double area() {
+            return (uTo - uFrom) * (vTo - vFrom);
+        }
+
+        /** 块局部 Y 下缘（法线为 Y 轴的面 = fixedValue）。 */
+        double localMinY() {
+            return axis == Axis.Y ? fixedValue : (axis == Axis.X ? uFrom : vFrom);
+        }
+
+        /** 块局部 Y 上缘。 */
+        double localMaxY() {
+            return axis == Axis.Y ? fixedValue : (axis == Axis.X ? uTo : vTo);
+        }
+
+        Vec3 worldCenter(BlockPos pos) {
+            return new Vec3(
+                    (worldMinX(pos) + worldMaxX(pos)) / 2.0,
+                    (worldMinY(pos) + worldMaxY(pos)) / 2.0,
+                    (worldMinZ(pos) + worldMaxZ(pos)) / 2.0);
+        }
+
+        Vec3 worldRandomPoint(BlockPos pos) {
+            // nextDouble(origin, bound) 要求 origin < bound，固定轴（min==max）直接取值
+            return new Vec3(
+                    randRange(worldMinX(pos), worldMaxX(pos)),
+                    randRange(worldMinY(pos), worldMaxY(pos)),
+                    randRange(worldMinZ(pos), worldMaxZ(pos)));
+        }
+
+        private double randRange(double from, double to) {
+            return to > from ? RANDOM.nextDouble(from, to) : from;
+        }
+
+        /** LB truncateY(0.6)：把面上部截到 y=0.6；法线为 Y 轴的面或截空返回 null。 */
+        Face truncateY(double limit) {
+            if (axis == Axis.Y) {
+                return null;
+            }
+            double newMax = axis == Axis.X ? Math.min(uTo, limit) : Math.min(vTo, limit);
+            if (axis == Axis.X) {
+                return newMax > uFrom ? new Face(uFrom, vFrom, newMax, vTo, axis, fixedValue) : null;
+            }
+            return newMax > vFrom ? new Face(uFrom, vFrom, uTo, newMax, axis, fixedValue) : null;
+        }
+
+        /** LB trimFace：四边各收 15% 尺寸，收空则取中心线。 */
+        Face trimmed() {
+            double offU = (uTo - uFrom) * 0.15;
+            double offV = (vTo - vFrom) * 0.15;
+            double u1 = uFrom + offU;
+            double u2 = uTo - offU;
+            double v1 = vFrom + offV;
+            double v2 = vTo - offV;
+            if (u1 > u2) {
+                u1 = u2 = (uFrom + uTo) / 2.0;
+            }
+            if (v1 > v2) {
+                v1 = v2 = (vFrom + vTo) / 2.0;
+            }
+            return new Face(u1, v1, u2, v2, axis, fixedValue);
+        }
+
+        /** 与世界坐标 AABB 求交；交不出面积返回 null。 */
+        Face clampToWorldBox(AABB box, BlockPos pos) {
+            double x1 = Math.max(worldMinX(pos), box.minX);
+            double x2 = Math.min(worldMaxX(pos), box.maxX);
+            double y1 = Math.max(worldMinY(pos), box.minY);
+            double y2 = Math.min(worldMaxY(pos), box.maxY);
+            double z1 = Math.max(worldMinZ(pos), box.minZ);
+            double z2 = Math.min(worldMaxZ(pos), box.maxZ);
+            if (x1 > x2 || y1 > y2 || z1 > z2) {
+                return null;
+            }
+            return switch (axis) {
+                case X -> new Face(y1 - pos.getY(), z1 - pos.getZ(), y2 - pos.getY(), z2 - pos.getZ(), axis, fixedValue);
+                case Y -> new Face(x1 - pos.getX(), z1 - pos.getZ(), x2 - pos.getX(), z2 - pos.getZ(), axis, fixedValue);
+                case Z -> new Face(x1 - pos.getX(), y1 - pos.getY(), x2 - pos.getX(), y2 - pos.getY(), axis, fixedValue);
+            };
+        }
+    }
+
+    /** 直线 (from, dir) 与面所在平面（法线轴 axis）的交点参数 t；近平行返回 null。 */
+    private Double rayPlaneT(Vec3 from, Vec3 dir, double planeFixed, Axis axis) {
+        double d = switch (axis) {
+            case X -> dir.x;
+            case Y -> dir.y;
+            case Z -> dir.z;
+        };
+        if (Math.abs(d) < 1.0e-6) {
+            return null;
+        }
+        double f = switch (axis) {
+            case X -> from.x;
+            case Y -> from.y;
+            case Z -> from.z;
+        };
+        return (planeFixed - f) / d;
+    }
+
+    // ------------------------------------------------------------------
+    // 放置与挥手
+    // ------------------------------------------------------------------
+
+    private void placeIfCrosshairValid(Minecraft mc) {
+        Target target = currentTarget;
+        if (target == null) {
             return;
         }
-        boolean lookingAtBlock = false;
-        HitResult result = RayTraceUtil.rayTrace(1.0f, rots);
-        if (result.getType() == HitResult.Type.BLOCK) {
-            BlockHitResult blockHit = (BlockHitResult) result;
-            if (blockHit.getBlockPos().equals(currentPlacement.position) && blockHit.getDirection() != Direction.UP) {
-                lookingAtBlock = true;
+        // RequiresSight：用目标旋转做额外可见性校验（LB RequiresSight）
+        if (requiresSight.getValue()
+                && !RayTraceUtil.canRayTrace(target.rotation(), target.direction(), target.interactedBlockPos(), true)) {
+            return;
+        }
+
+        Rotation current = currentRotationBaseline();
+        HitResult hit = RayTraceUtil.rayTrace(1.0f, current);
+        if (!(hit instanceof BlockHitResult blockHit)) {
+            return;
+        }
+        // LB doesCrosshairTargetMatchRequirements：块 / 面 / 点高度三重匹配
+        if (!blockHit.getBlockPos().equals(target.interactedBlockPos())
+                || blockHit.getDirection() != target.direction()
+                || blockHit.getLocation().y < target.minPlacementY()) {
+            return;
+        }
+
+        InteractionHand hand = BlockUtil.isPlaceable(mc.player.getMainHandItem())
+                ? InteractionHand.MAIN_HAND : InteractionHand.OFF_HAND;
+        if (!BlockUtil.isPlaceable(mc.player.getItemInHand(hand))) {
+            return;
+        }
+
+        BlockHitResult placeHit = new BlockHitResult(target.interactionPoint(), target.direction(),
+                target.interactedBlockPos(), false);
+        InteractionResult result = mc.gameMode.useItemOn(mc.player, hand, placeHit);
+        if (result.consumesAction()) {
+            swing(hand);
+            currentTarget = null;
+        }
+    }
+
+    /** LB SwingMode.accept 逐字语义。 */
+    private void swing(InteractionHand hand) {
+        Minecraft mc = Minecraft.getInstance();
+        switch (swingMode.getValue()) {
+            case "DoNotHide" -> mc.player.swing(hand);
+            case "HideForBoth" -> {
+                // 双端都不挥
             }
-        }
-        if (!lookingAtBlock && mc.player.tickCount % 4 == 0) {
-            rots.setYaw(mc.player.getYRot() + RandomUtils.nextFloat(0.0f, 0.5f) - 0.25f);
+            case "HideForClient" -> mc.player.connection.send(new ServerboundSwingPacket(hand));
+            case "HideForServer" -> mc.player.swing(hand, false);
+            default -> mc.player.swing(hand);
         }
     }
 
-    private record PlacementTarget(BlockPos position, Direction facing) {
+    private boolean isSolidForPlacement(BlockState state, BlockPos pos) {
+        Minecraft mc = Minecraft.getInstance();
+        return !state.getCollisionShape(mc.level, pos).isEmpty() && !state.canBeReplaced();
     }
 
-    private record PlacementCandidate(BlockPos pos, Direction direction, int depth) {
+    /** 一次放置目标：interactedBlockPos = 被点击的块，placedBlockPos = 方块将出现的格。 */
+    private record Target(BlockPos interactedBlockPos, BlockPos placedBlockPos, Direction direction,
+                          Vec3 interactionPoint, double minPlacementY, Rotation rotation) {
     }
 }

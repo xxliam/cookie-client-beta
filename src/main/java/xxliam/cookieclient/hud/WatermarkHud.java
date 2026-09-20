@@ -8,6 +8,7 @@ import xxliam.cookieclient.modules.impl.movement.Scaffold;
 import xxliam.cookieclient.render.CustomFont;
 import xxliam.cookieclient.render.FontStore;
 import xxliam.cookieclient.render.Renderer;
+import xxliam.cookieclient.utils.render.ThemeHelper;
 
 import java.awt.Color;
 
@@ -87,6 +88,7 @@ public class WatermarkHud implements IHudElement {
         return FontStore.momoSignature(BRAND_VISUAL_SIZE);
     }
 
+    /** 次要文字原色（Dark 用；Light 由 {@link ThemeHelper#muted(float)} 给近黑灰）。 */
     private static final int primaryColor = new Color(170, 170, 170).getRGB();
     private static final int shadowColor = new Color(0, 0, 0, 100).getRGB();
 
@@ -145,8 +147,9 @@ public class WatermarkHud implements IHudElement {
         float brandCenterX = x + width / 2.0f;
         float brandLeft = brandCenterX - brandWidth / 2.0f;
         float centerY = y + height / 2.0f;
-        int textColor = colorWithAlpha(Color.WHITE.getRGB(), alpha);
-        int subColor = colorWithAlpha(primaryColor, alpha);
+        // 前景色随明暗主题（Dark 白 / Light 近黑）；文字投影是「阴影」，不随明暗反转
+        int textColor = ThemeHelper.foreground(alpha);
+        int subColor = ThemeHelper.shade(primaryColor, alpha);
         int shadow = colorWithAlpha(shadowColor, alpha);
 
         // 每段各自按「那段文字的墨迹」居中：三段墨迹高度不同（版本号含 b/t 上探、延迟是数字），

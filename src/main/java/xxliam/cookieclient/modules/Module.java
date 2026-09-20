@@ -1,7 +1,10 @@
 package xxliam.cookieclient.modules;
 
+import com.mojang.blaze3d.vertex.PoseStack;
+import net.minecraft.client.Camera;
 import net.minecraft.client.gui.GuiGraphics;
 import xxliam.cookieclient.settings.Setting;
+import xxliam.cookieclient.settings.impl.ModeSetting;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -68,18 +71,33 @@ public abstract class Module {
     }
 
     /**
-     * 该模块的开关状态是否写入 modules.json 持久化并在启动时恢复。
+     * 该模块的开关状态是否应当被持久化。
      * <p>
-     * 默认 true。GUI 类模块（如 ClickGui）的 enabled 只在界面打开期间有意义，
-     * 一旦随配置保存并在下次启动时恢复，会触发 setScreen 弹窗甚至启动期崩溃，
-     * 应返回 false 完全排除出持久化。
+     * <b>2026-09-18：按用户要求整个配置系统已删除</b>（不再读写 modules.json / values.json /
+     * binds.json，重启即回默认），本方法目前<b>没有任何调用方</b>，保留仅为记录语义 + 日后若要
+     * 恢复持久化时即取即用。原语义：GUI 类模块（如 ClickGui）的 enabled 只在界面打开期间有意义，
+     * 一旦随配置保存并在下次启动时恢复，会触发 setScreen 弹窗甚至启动期崩溃，应返回 false。
      */
     public boolean shouldPersistEnabled() {
         return true;
     }
 
-    /** 模块列表右侧附加的实时状态后缀（如开火速率），无则 null。 */
+    /**
+     * 模块列表右侧附加的实时状态后缀（如开火速率），无则 null。
+     * <p>
+     * 默认实现 = 第一个<b>有值</b>的 {@link ModeSetting} 当前档位：所有带模式设置的模块
+     * 自动在 ModuleList 显示当前 mode，无需逐个覆写。想要更具体信息（数值范围 / 计时等）
+     * 的模块自行覆写本方法；返回 null 则不显示后缀。
+     */
     public String getSuffix() {
+        for (Setting<?> setting : settings) {
+            if (setting instanceof ModeSetting modeSetting) {
+                String value = modeSetting.getValue();
+                if (value != null) {
+                    return value;
+                }
+            }
+        }
         return null;
     }
 
@@ -138,5 +156,19 @@ public abstract class Module {
      * @param partialTicks 帧间插值
      */
     public void render(GuiGraphics guiGraphics, float partialTicks) {
+    }
+
+    /**
+     * 每帧世界空间渲染（由 WorldRenderHook 驱动），仅启用时调用。
+     * <p>
+     * 执行时机 = Fabric {@code WorldRenderEvents.LAST}：世界已画完、手部与 GUI 尚未渲染，
+     * 适合画穿墙可见的 ESP 几何。传入的 {@code poseStack} 只含<b>相机旋转</b>（不含平移），
+     * 顶点需用相机相对坐标，详见 {@code WorldRenderHelper}。
+     *
+     * @param poseStack    世界渲染 PoseStack
+     * @param camera       当前相机（可取位置/朝向）
+     * @param partialTicks 帧间插值
+     */
+    public void renderWorld(PoseStack poseStack, Camera camera, float partialTicks) {
     }
 }

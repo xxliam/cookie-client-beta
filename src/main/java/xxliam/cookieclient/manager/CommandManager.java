@@ -2,7 +2,6 @@ package xxliam.cookieclient.manager;
 
 import xxliam.cookieclient.command.Command;
 import xxliam.cookieclient.command.impl.BindCommand;
-import xxliam.cookieclient.command.impl.ConfigCommand;
 import xxliam.cookieclient.command.impl.ToggleCommand;
 import xxliam.cookieclient.utils.misc.ChatUtil;
 
@@ -24,7 +23,6 @@ public class CommandManager {
     public CommandManager() {
         add(new ToggleCommand());
         add(new BindCommand());
-        add(new ConfigCommand());
     }
 
     public void add(Command command) {

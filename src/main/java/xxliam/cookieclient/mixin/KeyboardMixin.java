@@ -10,7 +10,6 @@ import org.spongepowered.asm.mixin.injection.Inject;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 import xxliam.cookieclient.CookieClient;
 import xxliam.cookieclient.gui.newclickgui.NewClickGui;
-import xxliam.cookieclient.gui.dropdownclickgui.DropdownClickGui;
 import xxliam.cookieclient.modules.impl.render.ClickGui;
 
 /**
@@ -66,7 +65,7 @@ public class KeyboardMixin {
 
     /** 当前 Screen 若是本客户端的 ClickGUI，返回其开关键；否则返回 -1。 */
     private static int getClickGuiKey(Screen screen) {
-        if (screen instanceof NewClickGui || screen instanceof DropdownClickGui) {
+        if (screen instanceof NewClickGui) {
             return ClickGui.INSTANCE != null ? ClickGui.INSTANCE.getKeyBind() : -1;
         }
         return -1;

@@ -9,19 +9,23 @@ import xxliam.cookieclient.modules.impl.combat.AutoClicker;
 import xxliam.cookieclient.modules.impl.combat.KillAura;
 import xxliam.cookieclient.modules.impl.exploit.Disabler;
 import xxliam.cookieclient.modules.impl.misc.AimAssist;
+import xxliam.cookieclient.modules.impl.misc.ChestStealer;
+import xxliam.cookieclient.modules.impl.misc.InvManager;
 import xxliam.cookieclient.modules.impl.movement.GuiMove;
 import xxliam.cookieclient.modules.impl.movement.NoDelay;
 import xxliam.cookieclient.modules.impl.movement.Scaffold;
 import xxliam.cookieclient.modules.impl.movement.Sprint;
 import xxliam.cookieclient.modules.impl.player.NoFall;
-import xxliam.cookieclient.modules.impl.render.Animations;
+import xxliam.cookieclient.modules.impl.render.AntiNausea;
 import xxliam.cookieclient.modules.impl.render.AspectRatio;
+import xxliam.cookieclient.modules.impl.render.ChestESP;
 import xxliam.cookieclient.modules.impl.render.ClickGui;
 import xxliam.cookieclient.modules.impl.render.ESP;
 import xxliam.cookieclient.modules.impl.render.FullBright;
 import xxliam.cookieclient.modules.impl.render.MotionCamera;
 import xxliam.cookieclient.modules.impl.render.NameProtect;
 import xxliam.cookieclient.modules.impl.render.Projectiles;
+import xxliam.cookieclient.modules.impl.render.SwordBlocking;
 import xxliam.cookieclient.modules.impl.render.Theme;
 import xxliam.cookieclient.modules.impl.render.Watermark;
 import xxliam.cookieclient.modules.impl.render.hud.ClientElements;
@@ -61,15 +65,19 @@ public class ModuleManager {
         add(new Notifications());
         add(new ClientElements());
         add(new FullBright());
+        add(new AntiNausea());
+        add(new ChestESP());
         add(new AspectRatio());
         add(new NameProtect());
-        add(new Animations());
+        add(new SwordBlocking());
         add(new AutoTools());
         add(new ClickGui());
         add(new Watermark());
         add(new AutoPlay());
         add(new Projectiles());
         add(new MotionCamera());
+        add(new InvManager());
+        add(new ChestStealer());
     }
 
     public void add(Module module) {
@@ -119,7 +127,7 @@ public class ModuleManager {
             }
         }
         if (toggled && CookieClient.CONFIG_MANAGER != null) {
-            CookieClient.CONFIG_MANAGER.save(); // 快捷键切换立即持久化
+            CookieClient.CONFIG_MANAGER.save(); // 自动保存：快捷键切换立即持久化
         }
     }
 

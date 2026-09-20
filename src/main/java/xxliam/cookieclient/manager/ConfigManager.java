@@ -6,9 +6,11 @@ import xxliam.cookieclient.config.ModulesConfig;
 import xxliam.cookieclient.config.ValuesConfig;
 
 /**
- * 配置管理器：负责模块状态与设置项的加载 / 保存。
+ * 配置管理器：聚合 modules.json（开关）/ values.json（设置值）/ binds.json（绑键）
+ * 三个配置文件的读写。
  * <p>
- * 对应 OpenZen 的 {@code shit.zen.manager.ConfigManager}。
+ * 自动保存时机：zen ClickGUI 完全关闭、快捷键切换模块后立即落盘；
+ * 启动时在 {@code CookieClient.onInitialize} 末尾加载。
  */
 public class ConfigManager {
 
@@ -16,20 +18,18 @@ public class ConfigManager {
     private final ValuesConfig valuesConfig = new ValuesConfig();
     private final KeyBindsConfig keyBindsConfig = new KeyBindsConfig();
 
-    /**
-     * 启动时加载配置。配置文件不存在时静默跳过。
-     */
-    public void load() {
-        modulesConfig.load(CookieClient.MODULE_MANAGER.getModules());
-        valuesConfig.load(CookieClient.MODULE_MANAGER.getModules());
-        keyBindsConfig.load(CookieClient.MODULE_MANAGER.getModules());
-        CookieClient.LOGGER.info("Config loaded.");
+    /** 保存全部配置（三个文件）。 */
+    public void save() {
+        modulesConfig.save();
+        valuesConfig.save();
+        keyBindsConfig.save();
     }
 
-    public void save() {
-        modulesConfig.save(CookieClient.MODULE_MANAGER.getModules());
-        valuesConfig.save(CookieClient.MODULE_MANAGER.getModules());
-        keyBindsConfig.save(CookieClient.MODULE_MANAGER.getModules());
-        CookieClient.LOGGER.info("Config saved.");
+    /** 加载全部配置（文件不存在则跳过对应部分）。 */
+    public void load() {
+        modulesConfig.load();
+        valuesConfig.load();
+        keyBindsConfig.load();
+        CookieClient.LOGGER.info("[Config] loaded modules/values/binds from {}", ConfigManager.class.getSimpleName());
     }
 }

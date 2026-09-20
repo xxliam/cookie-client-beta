@@ -1,6 +1,8 @@
 package xxliam.cookieclient;
 
+import net.fabricmc.api.EnvType;
 import net.fabricmc.api.ModInitializer;
+import net.fabricmc.loader.api.FabricLoader;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import xxliam.cookieclient.manager.CommandManager;
@@ -9,6 +11,7 @@ import xxliam.cookieclient.manager.ModuleManager;
 import xxliam.cookieclient.manager.TargetManager;
 import xxliam.cookieclient.notification.NotificationManager;
 import xxliam.cookieclient.notification.NotificationSounds;
+import xxliam.cookieclient.render.WorldRenderHook;
 
 /**
  * Cookie Client 主入口。
@@ -41,7 +44,13 @@ public class CookieClient implements ModInitializer {
         // 注册通知提示音（notify.on / notify.off，对应 assets 下 sounds.json 与 notify_on/off.ogg）
         NotificationSounds.register();
 
-        // 加载本地配置（不存在则跳过）
+        // 注册世界空间渲染通道（仅客户端；WorldRenderHook 引用 fabric-rendering-v1 客户端类，
+        // 放在环境判断内可避免该类在专用服务端被解析）
+        if (FabricLoader.getInstance().getEnvironmentType() == EnvType.CLIENT) {
+            WorldRenderHook.register();
+        }
+
+        // 加载本地配置（modules/values/binds.json，不存在则跳过）
         CONFIG_MANAGER.load();
 
         LOGGER.info("{} initialized. Loaded {} modules.", NAME, MODULE_MANAGER.getModules().size());

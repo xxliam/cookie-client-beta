@@ -27,4 +27,11 @@ public class KillAura extends Module {
         }
         // TODO: 遍历实体 -> 选目标 -> 攻击（配合 RotationUtil / TargetManager）
     }
+
+    /** 后缀 = 攻击范围（整数省小数，如 3 / 3.5）。 */
+    @Override
+    public String getSuffix() {
+        float r = range.getValue().floatValue();
+        return r == Math.floor(r) ? String.valueOf((int) r) : String.valueOf(r);
+    }
 }

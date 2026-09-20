@@ -5,7 +5,12 @@ import net.minecraft.client.gui.GuiGraphics;
 import xxliam.cookieclient.utils.animation.SmoothAnimationTimer;
 
 /**
- * ClickGUI 可交互元素基类（面板 / 模块 / 设置控件）。
+ * ClickGUI 渲染元素基类（面板 / 模块 / 设置控件）。
+ * <p>
+ * <b>只负责渲染与几何查询</b>：位置 / 尺寸的读写、命中区域的纯函数（{@code contains*} 系列，
+ * 由各子类按自身布局给出）、以及绘制。鼠标 / 键盘事件与拖动状态一律由
+ * {@code gui.newclickgui.input.GuiInputRouter} 处理，元素只暴露语义化动作方法
+ * （{@code toggle()} / {@code applySlider()} …）供其调用。
  */
 public abstract class UIElement {
 
@@ -21,16 +26,9 @@ public abstract class UIElement {
     public void reset() {
     }
 
-    public boolean mouseClicked(double mouseX, double mouseY, int button) {
-        return false;
-    }
-
-    public boolean mouseReleased(double mouseX, double mouseY, int button) {
-        return false;
-    }
-
-    public boolean mouseScrolled(double mouseX, double mouseY, double scrollDelta) {
-        return false;
+    /** 命中查询：元素包围框内（子类可用更精确的几何覆盖）。 */
+    public boolean contains(double mouseX, double mouseY) {
+        return mouseX >= x && mouseX <= x + width && mouseY >= y && mouseY <= y + height;
     }
 
     public float getAnimatedHeight() {

@@ -6,8 +6,8 @@ import net.minecraft.util.Mth;
 import xxliam.cookieclient.modules.impl.world.AutoPlay;
 import xxliam.cookieclient.render.CustomFont;
 import xxliam.cookieclient.render.FontStore;
+import xxliam.cookieclient.utils.render.ThemeHelper;
 
-import java.awt.Color;
 import java.util.ArrayList;
 import java.util.List;
 
@@ -154,7 +154,7 @@ public class AutoPlayHud implements IHudElement {
         float iconRadius = iconSize / 2.0f - 2.0f * S;
 
         // ---- 环形进度 ----
-        int white = colorWithAlpha(Color.WHITE.getRGB(), alpha);
+        int white = ThemeHelper.foreground(alpha);
         if (animProgress > 0.001f) {
             float arcProgress = 360.0f * animProgress;
             ZenHudDraw.drawArc(guiGraphics.pose(), iconCx - iconRadius, iconCy - iconRadius,

@@ -11,7 +11,7 @@ public final class CookieClientVersion {
     /** 品牌短名（对应 zen 原版 logo 旁的短品牌；加载界面 logo 替换也用它）。 */
     public static final String BRAND = "Cookie";
     /** 版本短标签。 */
-    static final String VERSION = "beta1.0";
+    static final String VERSION = "beta3";
 
     private CookieClientVersion() {
     }

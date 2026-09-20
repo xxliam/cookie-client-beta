@@ -7,22 +7,21 @@ import net.minecraft.world.item.ItemStack;
 import xxliam.cookieclient.modules.impl.movement.Scaffold;
 import xxliam.cookieclient.render.CustomFont;
 import xxliam.cookieclient.render.FontStore;
-import xxliam.cookieclient.utils.animation.SpringAnimation;
-import xxliam.cookieclient.utils.game.MoveUtility;
-
-import java.awt.Color;
-import java.util.Locale;
+import xxliam.cookieclient.utils.animation.SmoothAnimationTimer;
+import xxliam.cookieclient.utils.math.Easing;
+import xxliam.cookieclient.utils.math.Easings;
+import xxliam.cookieclient.utils.render.ThemeHelper;
 
 /**
- * ScaffoldHud：DynamicIsland 内的搭路状态（方块数 / 放置速度 / 进度条）。
+ * ScaffoldHud：DynamicIsland 内的搭路状态（方块数 / 进度条）。
  * <p>
- * 照搬 OpenZen {@code shit.zen.hud.ScaffoldHud}：Size(260,30)、图标起笔 iconX=x+8、
- * 进度条由 {@link #progressAnim} 弹簧驱动、紫色进度 (153,0,255)、背景 (30,30,30)，
- * 文字用 poppinsBold14 / poppinsMedium10（zen 原始视觉字号），visible=Scaffold 开启。
+ * 照搬 OpenZen {@code shit.zen.hud.ScaffoldHud} 改造：Size(260,30)、进度条由
+ * {@link #progressAnim} 弹簧驱动、填充色为 Theme 主题色（原紫色 (153,0,255) 已按需求改）、
+ * 轨道底色随明暗主题（{@link ThemeHelper#shade}）；方块图标、放置速度（bps）文字
+ * 均已按需求删除，只剩「N blocks」一行（cap 盒中心对齐岛中线），
+ * 文字用 poppinsBold14（zen 原始视觉字号），visible=Scaffold 开启。
  * <p>
  * 尺寸：字号与全部布局常量均乘 {@link IslandMetrics#scale()} 后<b>原生栅格化</b>。
- * 唯一例外是方块图标 —— {@code GuiGraphics.renderItem} 由原版按固定 16×16 GUI 单位绘制、
- * 不随字号变化，故在其外层临时套一层 {@code scale(S)}（块内坐标回到 zen 原始单位）。
  */
 public class ScaffoldHud implements IHudElement {
 
@@ -33,7 +32,7 @@ public class ScaffoldHud implements IHudElement {
         refreshScale();
     }
 
-    /** 按当前大小档位刷新缩放（字号在 blockCountFont/speedFont 里即时取用，无需缓存）。 */
+    /** 按当前大小档位刷新缩放（字号在 blockCountFont 里即时取用，无需缓存）。 */
     private static void refreshScale() {
         S = IslandMetrics.scale();
     }
@@ -42,11 +41,14 @@ public class ScaffoldHud implements IHudElement {
         return FontStore.poppinsBold(14.0f * S);
     }
 
-    private static final CustomFont speedFont() {
-        return FontStore.poppinsMedium(10.0f * S);
-    }
+    /**
+     * 进度条补间：**点对点曲线**（原 zen 的弹簧 {@code (250,1,22,0)} 阻尼不足会过冲，
+     * 填充宽度算出来会超过轨道本身）。时长取 ≈ 原弹簧到达稳定的耗时，速度观感不变、无回弹。
+     */
+    private static final double PROGRESS_DURATION = 0.3;
+    private static final Easing PROGRESS_EASING = Easings.EASE_OUT_POW3;
 
-    private final SpringAnimation progressAnim = new SpringAnimation(250.0f, 1.0f, 22.0f, 0.0f);
+    private final SmoothAnimationTimer progressAnim = new SmoothAnimationTimer();
     private long lastUpdateTime = 0L;
 
     @Override
@@ -81,73 +83,50 @@ public class ScaffoldHud implements IHudElement {
         if (blockItem.isEmpty()) {
             return;
         }
-        float iconSize = height - 16.0f * S;
-        float iconX = x + 8.0f * S;
-        float iconY = y + 8.0f * S;
-        // 方块图标：renderItem 固定 16×16 GUI 单位，故外层套 S 缩放；块内回到 zen 单位
-        //（+2 落点、iconSize-4 作第 5 参 —— 与旧版逐字一致）
-        if (alpha > 0.1f && iconSize - 4.0f * S > 0.0f) {
-            var iconPose = guiGraphics.pose();
-            iconPose.pushPose();
-            iconPose.translate(iconX + 2.0f * S, iconY + 2.0f * S, 0.0f);
-            iconPose.scale(S, S, 1.0f);
-            guiGraphics.renderItem(blockItem, 0, 0, 0, (int) (iconSize / S) - 4);
-            iconPose.popPose();
-        }
 
-        // ---- 进度条 ----
+        // ---- 进度条 + 方块数（bps 文字已按需求删除） ----
         int blockCount = blockItem.getCount();
         String countText = blockCount + " blocks";
-        double speedBps = MoveUtility.getBlocksPerSecond();
-        String speedText = String.format(Locale.ROOT, "%.2fb/s", speedBps);
         CustomFont blockCountFont = blockCountFont();
-        CustomFont speedFont = speedFont();
         float countWidth = blockCountFont.getStringWidth(countText);
-        float speedWidth = speedFont.getStringWidth(speedText);
-        float maxTextWidth = Math.max(countWidth, speedWidth);
-        float barWidth = width - iconSize - maxTextWidth - 32.0f * S;
+        // 方块图标与 bps 文字均已删除：进度条从左内边距直接开始，右端让给方块数
+        float barWidth = width - countWidth - 24.0f * S;
         float barHeight = 6.0f * S;
-        float barX = x + 8.0f * S + iconSize + 8.0f * S;
+        float barX = x + 8.0f * S;
         float barY = y + height / 2.0f - barHeight / 2.0f;
         float progressPct = Math.min(1.0f, (float) blockCount / 64.0f);
         updateProgress(progressPct);
 
         ZenHudDraw.drawRoundedRect(guiGraphics.pose(), barX, barY, barWidth, barHeight, barHeight / 2.0f,
-                colorWithAlpha(new Color(30, 30, 30).getRGB(), alpha));
-        if (progressAnim.getValue() > 0.0f) {
-            ZenHudDraw.drawRoundedRect(guiGraphics.pose(), barX, barY, barWidth * progressAnim.getValue(), barHeight,
-                    barHeight / 2.0f, colorWithAlpha(new Color(153, 0, 255).getRGB(), alpha));
+                ThemeHelper.shade(0x1E1E1E, alpha));
+        float fill = progressAnim.getValueF();
+        if (fill > 0.0f) {
+            // 填充色 = Theme 主题色（原 zen 紫色 (153,0,255) 已按需求替换）
+            ZenHudDraw.drawRoundedRect(guiGraphics.pose(), barX, barY, barWidth * fill, barHeight,
+                    barHeight / 2.0f, colorWithAlpha(ThemeHelper.getThemeColors()[0], alpha));
         }
 
-        // ---- 文字（zen：count 上 / speed 下，围绕中线） ----
+        // ---- 文本（只剩方块数一行，cap 盒中心对齐岛中线后整体再上抬一点点） ----
         float textX = barX + barWidth + 8.0f * S;
         float centerY = y + height / 2.0f;
-        float countX = textX + (maxTextWidth - countWidth) / 2.0f;
-        float speedX = textX + (maxTextWidth - speedWidth) / 2.0f;
-        float countBaseline = centerY - ZenHudDraw.capHeight(blockCountFont) / 2.0f + 2.0f * S;
-        ZenHudDraw.drawBaseline(guiGraphics.pose(), blockCountFont, countText, countX, countBaseline,
-                colorWithAlpha(Color.WHITE.getRGB(), alpha));
-        float speedBaseline = centerY + ZenHudDraw.capHeight(speedFont) / 2.0f + 8.0f * S;
-        ZenHudDraw.drawBaseline(guiGraphics.pose(), speedFont, speedText, speedX, speedBaseline,
-                colorWithAlpha(Color.GRAY.getRGB(), alpha));
+        float countBaseline = centerY + ZenHudDraw.ascent(blockCountFont)
+                - ZenHudDraw.capHeight(blockCountFont) / 2.0f - 1.5f * S;
+        ZenHudDraw.drawBaseline(guiGraphics.pose(), blockCountFont, countText, textX, countBaseline,
+                ThemeHelper.foreground(alpha));
     }
 
-    /** 首个数据立即就位，其后由弹簧动画推进（照搬 zen setX）。 */
+    /** 首个数据立即就位；其后由曲线补间推进（每秒最多刷新一次的采样节流照搬 zen）。 */
     private void updateProgress(float progressPct) {
         long now = System.currentTimeMillis();
         if (lastUpdateTime == 0L || now - lastUpdateTime > 1000L) {
+            // 首个数据 / 距上次刷新超过 1s（刚开搭路或严重掉帧）：直接就位，不播补间
             lastUpdateTime = now;
-            progressAnim.setValue(progressPct);
-            progressAnim.setTargetValue(progressPct);
-            return;
-        }
-        float deltaSec = (float) (now - lastUpdateTime) / 1000.0f;
-        if (deltaSec <= 0.0f) {
+            progressAnim.reset(progressPct);
             return;
         }
         lastUpdateTime = now;
-        progressAnim.setTargetValue(progressPct);
-        progressAnim.update(deltaSec);
+        progressAnim.animate(progressPct, PROGRESS_DURATION, PROGRESS_EASING);
+        progressAnim.tick();
     }
 
     private ItemStack getBlockItem() {

@@ -6,9 +6,14 @@ import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 
 /**
- * 字体仓库：集中加载 ClickGUI 使用的自定义字体。
+ * 字体仓库：集中加载 ClickGUI / HUD 使用的自定义字体。
  * <p>
  * 仿 OpenZen 的 {@code shit.zen.render.FontStore}，资源命名空间改为 cookie-client。
+ * <p>
+ * 2026-09-18：opal 风格下拉 ClickGUI 删除时，一并移除了只服务它的 8 个字号
+ * （productsans-medium 5.5/6/7、productsans-bold 9、materialicons 6/9/10/12）。
+ * 注意 {@code loadFont} 是**类初始化期**执行（字段是 static final，会真的解析一次 TTF），
+ * 所以新增/删除这里的字段是有启动开销意义的，不要留死字段。
  */
 public final class FontStore {
 
@@ -38,17 +43,6 @@ public final class FontStore {
     public static final CustomFont PRODUCTSANS_BOLD_7 = loadFont(14.0f, "productsans-bold.ttf");
     public static final CustomFont PRODUCTSANS_MEDIUM_6_5 = loadFont(13.0f, "productsans-medium.ttf");
     public static final CustomFont PRODUCTSANS_MEDIUM_7_5 = loadFont(15.0f, "productsans-medium.ttf");
-
-    // ---- Opal DropdownClickGUI 字号（照搬 opal FontRepository 同名族字号：
-    // productsans-medium/bold 视觉 5.5/6/7/8/9 + materialicons-regular 视觉 6/9/10/12） ----
-    public static final CustomFont PRODUCTSANS_MEDIUM_5_5 = loadFont(11.0f, "productsans-medium.ttf");
-    public static final CustomFont PRODUCTSANS_MEDIUM_6 = loadFont(12.0f, "productsans-medium.ttf");
-    public static final CustomFont PRODUCTSANS_MEDIUM_7 = loadFont(14.0f, "productsans-medium.ttf");
-    public static final CustomFont PRODUCTSANS_BOLD_9 = loadFont(18.0f, "productsans-bold.ttf");
-    public static final CustomFont MATERIALICONS_6 = loadFont(12.0f, "materialicons-regular.ttf");
-    public static final CustomFont MATERIALICONS_9 = loadFont(18.0f, "materialicons-regular.ttf");
-    public static final CustomFont MATERIALICONS_10 = loadFont(20.0f, "materialicons-regular.ttf");
-    public static final CustomFont MATERIALICONS_12 = loadFont(24.0f, "materialicons-regular.ttf");
 
     // ---- zen watermark/HUD 体系字体（灵动岛用） ----
     // 岛内文字统一 Poppins 系列；MATERIALICONS 例外（EventAlert 的箭头/珍珠/闪电是符号字形，

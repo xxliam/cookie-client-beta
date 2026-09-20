@@ -2,6 +2,7 @@ package xxliam.cookieclient.render;
 
 import com.mojang.blaze3d.systems.RenderSystem;
 import com.mojang.blaze3d.vertex.BufferBuilder;
+import com.mojang.blaze3d.vertex.BufferUploader;
 import com.mojang.blaze3d.vertex.DefaultVertexFormat;
 import com.mojang.blaze3d.vertex.PoseStack;
 import com.mojang.blaze3d.vertex.Tesselator;
@@ -192,6 +193,196 @@ public class CustomFont implements Closeable {
     public void drawStringWithShadow(PoseStack poseStack, String text, double x, double y, int color) {
         drawStringColor(poseStack, text, (float) x + 0.5f, (float) y + 0.5f, SHADOW_COLOR);
         drawString(poseStack, text, (float) x, (float) y, color);
+    }
+
+    /** 文字阴影色（{@link #drawStringWithShadow} 用的那支）的 ARGB，供批量通道复用。 */
+    public static int shadowArgb() {
+        return SHADOW_COLOR.getRGB();
+    }
+
+    // ---------------------------------------------------------------------
+    // 批量文字通道（把 N 次 drawString 合并成 1 次 draw 调用）
+    // ---------------------------------------------------------------------
+
+    /*
+     * 背景：原 {@link #drawStringRGB} 每调用一次就 setShader + begin/end + 一次 draw，
+     * 且逐字符 new GlyphEntry 收集后再遍历发射（字符串越长分配越多）。
+     * ModuleList 每帧要画 N 行 × 2 遍（阴影 + 主色），于是 N×2 次 draw、N×2×len 个临时对象。
+     *
+     * 本通道把字形四边形**直接写进调用方持有的缓冲区**：一批内只 setShader 一次、
+     * begin/end 一次、draw 一次，且零临时对象。字形图集页按需切换（同页则完全不切换）。
+     *
+     * 使用约定：beginTextBatch(page) → appendText(...) × N → endTextBatch()。
+     * 一批内的文本应尽量同页（如纯 ASCII 的模块名）；若混入其它页，会中途 flush + 换绑，
+     * 输出仍然正确，只是多一次 draw。
+     */
+
+    /** 批次内当前绑定的图集页。 */
+    private ResourceLocation batchPage;
+    /** 批次内共用的缓冲区（Tesselator 只有一个，故批次不可嵌套）。 */
+    private BufferBuilder batchBuffer;
+    private boolean batchOpen;
+    /** appendText 复用的矩阵暂存，避免每条文本 new 一个 Matrix4f。 */
+    private final Matrix4f batchScratch = new Matrix4f();
+
+    /**
+     * 取某段文本所属的字形图集页（按需加载/栅格化字形；无可见字形时返回 null）。
+     * <p>
+     * 必须在 {@link #beginTextBatch} **之前**调用：它负责把字形准备好，
+     * 而 beginTextBatch 里的 flush 才会把新栅格化的字形上传进图谱。
+     */
+    public ResourceLocation glyphPageFor(String text) {
+        if (text == null || text.isEmpty()) {
+            return null;
+        }
+        for (int i = 0; i < text.length(); i++) {
+            char ch = text.charAt(i);
+            if (ch == '\u00a7' || ch == '\n' || ch == ' ') {
+                continue;
+            }
+            Glyph glyph = getOrLoadGlyph(ch);
+            if (glyph != null && glyph.value() != ' ') {
+                return glyph.owner().textureLocation;
+            }
+        }
+        return null;
+    }
+
+    /** 开始一批文字（page 由 {@link #glyphPageFor} 取得；可为 null = 无可见字形）。 */
+    public void beginTextBatch(ResourceLocation page) {
+        if (batchOpen) {
+            throw new IllegalStateException("文字批次不可嵌套");
+        }
+        checkGuiScaleChanged();
+        flushDirtyPages();
+        RenderSystem.enableBlend();
+        RenderSystem.defaultBlendFunc();
+        RenderSystem.disableCull();
+        RenderSystem.setShader(GameRenderer::getPositionTexColorShader);
+        if (page != null) {
+            RenderSystem.setShaderTexture(0, page);
+        }
+        batchPage = page;
+        batchBuffer = Tesselator.getInstance().getBuilder();
+        batchBuffer.begin(VertexFormat.Mode.QUADS, DefaultVertexFormat.POSITION_TEX_COLOR);
+        batchOpen = true;
+    }
+
+    /** 上传所有 dirty 图谱页；返回是否有页被重建（重建后需重新绑定纹理）。 */
+    private boolean flushDirtyPages() {
+        boolean rebuilt = false;
+        for (GlyphPage glyphPage : glyphPages) {
+            rebuilt |= glyphPage.flush();
+        }
+        return rebuilt;
+    }
+
+    /**
+     * 追加一段文字到当前批次（语义与 {@link #drawStringRGB} 一致：x 为左缘、y 为字形盒顶、
+     * 内部 round 到 0.1 像素并把 y 上移 1px；支持 {@code §} 颜色码与换行）。
+     *
+     * @param baseMatrix 调用方所在空间的基矩阵（一般即 {@code poseStack.last().pose()} 的副本）
+     */
+    public void appendText(Matrix4f baseMatrix, String text, float x, float y, int argb) {
+        if (!batchOpen || text == null || text.isEmpty()) {
+            return;
+        }
+        float a = (argb >>> 24 & 0xFF) / 255.0f;
+        float r0 = (argb >> 16 & 0xFF) / 255.0f;
+        float g0 = (argb >> 8 & 0xFF) / 255.0f;
+        float b0 = (argb & 0xFF) / 255.0f;
+        float curR = r0;
+        float curG = g0;
+        float curB = b0;
+        batchScratch.set(baseMatrix)
+                .translate((float) MathUtil.round(x, 1), (float) MathUtil.round(--y, 1), 0.0f)
+                .scale(1.0f / scale, 1.0f / scale, 1.0f);
+        Matrix4f matrix = batchScratch;
+        float penX = 0.0f;
+        float penY = 0.0f;
+        boolean inFormatting = false;
+        int lineStart = 0;
+        synchronized (glyphPageMap) {
+            for (int i = 0; i < text.length(); i++) {
+                char ch = text.charAt(i);
+                if (inFormatting) {
+                    inFormatting = false;
+                    char upper = Character.toUpperCase(ch);
+                    if (MC_COLOR_CODES.containsKey(upper)) {
+                        int[] rgb = colorToRGB(MC_COLOR_CODES.get(upper));
+                        curR = rgb[0] / 255.0f;
+                        curG = rgb[1] / 255.0f;
+                        curB = rgb[2] / 255.0f;
+                    } else if (upper == 'R') {
+                        curR = r0;
+                        curG = g0;
+                        curB = b0;
+                    }
+                } else if (ch == '\u00a7') {
+                    inFormatting = true;
+                } else if (ch == '\n') {
+                    penY += getStringHeight(text.substring(lineStart, i)) * scale;
+                    penX = 0.0f;
+                    lineStart = i + 1;
+                } else {
+                    Glyph glyph = getOrLoadGlyph(ch);
+                    if (glyph != null) {
+                        if (glyph.value() != ' ') {
+                            GlyphPage page = glyph.owner();
+                            if (batchPage == null || !batchPage.equals(page.textureLocation)) {
+                                switchBatchPage(page.textureLocation);
+                            }
+                            emitGlyph(matrix, penX, penY, glyph, page, curR, curG, curB, a);
+                        }
+                        penX += glyph.width() + letterSpacing;
+                    }
+                }
+            }
+        }
+    }
+
+    /** 结束批次：一次 draw 提交全部字形。 */
+    public void endTextBatch() {
+        if (!batchOpen) {
+            return;
+        }
+        batchOpen = false;
+        // 批次期间若按需栅格化了新字形，先上传再画；flush 会重建纹理，故之后必须重新绑定
+        if (flushDirtyPages() && batchPage != null) {
+            RenderSystem.setShaderTexture(0, batchPage);
+        }
+        BufferUploader.drawWithShader(batchBuffer.end());
+        RenderSystem.disableBlend();
+        batchBuffer = null;
+        batchPage = null;
+    }
+
+    /** 批次中途换图集页：先把已有内容提交，再换纹理、重开缓冲区。 */
+    private void switchBatchPage(ResourceLocation page) {
+        // 换页多半正是因为刚才按需加载了新字形 → 必须先 flush（会重建纹理）
+        if (flushDirtyPages() && batchPage != null) {
+            RenderSystem.setShaderTexture(0, batchPage);
+        }
+        BufferUploader.drawWithShader(batchBuffer.end());
+        RenderSystem.setShaderTexture(0, page);
+        batchPage = page;
+        batchBuffer = Tesselator.getInstance().getBuilder();
+        batchBuffer.begin(VertexFormat.Mode.QUADS, DefaultVertexFormat.POSITION_TEX_COLOR);
+    }
+
+    /** 发射单个字形的四个顶点（与 {@link #drawStringRGB} 的四边形逐字一致）。 */
+    private void emitGlyph(Matrix4f matrix, float atX, float atY, Glyph glyph, GlyphPage page,
+                           float r, float g, float b, float a) {
+        float glyphWidth = glyph.width();
+        float glyphHeight = glyph.height();
+        float u1 = (float) glyph.u() / page.imageWidth;
+        float v1 = (float) glyph.v() / page.imageHeight;
+        float u2 = (float) (glyph.u() + glyph.width()) / page.imageWidth;
+        float v2 = (float) (glyph.v() + glyph.height()) / page.imageHeight;
+        batchBuffer.vertex(matrix, atX, atY + glyphHeight, 0.0f).uv(u1, v2).color(r, g, b, a).endVertex();
+        batchBuffer.vertex(matrix, atX + glyphWidth, atY + glyphHeight, 0.0f).uv(u2, v2).color(r, g, b, a).endVertex();
+        batchBuffer.vertex(matrix, atX + glyphWidth, atY, 0.0f).uv(u2, v1).color(r, g, b, a).endVertex();
+        batchBuffer.vertex(matrix, atX, atY, 0.0f).uv(u1, v1).color(r, g, b, a).endVertex();
     }
 
     /**

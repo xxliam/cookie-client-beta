@@ -81,9 +81,14 @@ class GlyphPage {
     }
 
     /** 自上次上传后有新字符则（重新）上传纹理。 */
-    void flush() {
+    /**
+     * 上传图谱纹理（仅在 dirty 时）。
+     *
+     * @return 本次是否真的上传了（true = 纹理被重建，**绑定点上的旧 id 已失效，调用方需重新绑定**）
+     */
+    boolean flush() {
         if (!dirty) {
-            return;
+            return false;
         }
         dirty = false;
         if (uploaded) {
@@ -91,6 +96,7 @@ class GlyphPage {
         }
         uploadTexture(textureLocation, atlasImage);
         uploaded = true;
+        return true;
     }
 
     /**

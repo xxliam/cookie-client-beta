@@ -3,11 +3,13 @@ package xxliam.cookieclient.modules.impl.render.hud;
 import com.mojang.blaze3d.vertex.PoseStack;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.GuiGraphics;
+import net.minecraft.resources.ResourceLocation;
+import org.joml.Matrix4f;
 import xxliam.cookieclient.CookieClient;
-import xxliam.cookieclient.gui.dropdownclickgui.DropdownClickGui;
 import xxliam.cookieclient.gui.newclickgui.NewClickGui;
 import xxliam.cookieclient.modules.Category;
 import xxliam.cookieclient.modules.Module;
+import xxliam.cookieclient.render.CustomFont;
 import xxliam.cookieclient.render.FontStore;
 import xxliam.cookieclient.render.Renderer;
 import xxliam.cookieclient.settings.impl.BooleanSetting;
@@ -46,6 +48,29 @@ public class ModuleList extends Module {
     /** 行高（opal ModuleElement.OFFSET = 12）。 */
     public static final float OFFSET = 12.0f;
 
+    /** 行背景外圈晕开的模糊半径（opal 视觉参数，原 drawShadow 的第 5 参）。 */
+    private static final float SHADOW_BLUR = 6.0f;
+
+    // 每帧逐行几何缓存（复用数组，避免按行分配）——三段批次渲染需要先算完几何再分批发射
+    private float[] rowBgLeft = new float[0];
+    private float[] rowY = new float[0];
+    private float[] rowW = new float[0];
+    private float[] rowTextX = new float[0];
+    private float[] rowBarX = new float[0];
+    private int[] rowColor = new int[0];
+
+    private void ensureRowBuffers(int count) {
+        if (rowBgLeft.length >= count) {
+            return;
+        }
+        rowBgLeft = new float[count];
+        rowY = new float[count];
+        rowW = new float[count];
+        rowTextX = new float[count];
+        rowBarX = new float[count];
+        rowColor = new int[count];
+    }
+
     /**
      * 布局拖动的轴模式开关（自由移动实现已保留，勿删，后期备用）：
      * true = 自由双向拖动（旧行为：可沿 x/y 任意挪动，边框不出屏）；
@@ -65,7 +90,7 @@ public class ModuleList extends Module {
     private final ModeSetting barMode;
     private final BooleanSetting lowercase;
     private final BooleanSetting showSuffix;
-    /** 行背景不透明度（0-255，默认 128 = opal 原版 0x80090909 的 alpha）。 */
+    /** 行背景不透明度（百分制 0-100，默认 50 = opal 原版 0x80090909 的 alpha 128/255）。 */
     private final NumberSetting backgroundOpacity;
     private final MultiSelectSetting visibleCategories;
 
@@ -93,7 +118,7 @@ public class ModuleList extends Module {
         barMode = new ModeSetting("Bar mode", "Left", "Right", "None").withDefault("Left");
         lowercase = new BooleanSetting("Lowercase", true);
         showSuffix = new BooleanSetting("Show suffix", true);
-        backgroundOpacity = new NumberSetting("Background opacity", 128, 0, 255, 1);
+        backgroundOpacity = new NumberSetting("Background opacity %", 50, 0, 100, 1);
         visibleCategories = new MultiSelectSetting("Visible categories", categoryNames).withDefaults(categoryNames);
 
         addSetting(scale);
@@ -187,9 +212,7 @@ public class ModuleList extends Module {
         boolean leftBar = "Left".equals(bar);
 
         // ClickGUI 处于隐藏（折叠）态时进入「布局编辑态」：整列被白色半透明框圈住，可拖动
-        // 两种风格（Zen=NewClickGui / Opal=DropdownClickGui）的 E 按钮折叠态都算
-        boolean editMode = mc.screen instanceof NewClickGui gui && gui.isHidden()
-                || mc.screen instanceof DropdownClickGui drop && drop.isHidden();
+        boolean editMode = mc.screen instanceof NewClickGui gui && gui.isHidden();
 
         // 整列偏移（拖动）→ 等比缩放（原点 = ModuleList 所在侧顶角）。偏移在缩放之外：
         // 先 translate 把整块从默认贴边位置挪开，再以顶角为轴缩放，两者互不影响。
@@ -201,9 +224,33 @@ public class ModuleList extends Module {
         pose.translate(ox, oy, 0.0f);
         RenderHelper.pushScaleAround(pose, rightSide ? (float) scaledWidth : 0.0f, 0.0f, factor);
 
-        for (int i = 0; i < visibleList.size(); i++) {
-            Entry entry = visibleList.get(i);
+        // ---------------------------------------------------------------------
+        // 三段批次渲染（把每行的 6 次 draw 合并成 3 次总 draw）
+        // ---------------------------------------------------------------------
+        // 原实现逐行调 drawShadow / drawRect / drawRoundedRect ×2 / drawStringWithShadow：
+        // 每行 6 次独立 draw（各自 setShader + begin/end + 上传），20 行 ≈ 120 次；
+        // 其中 drawShadow 还按「宽度×高度」缓存模糊纹理 —— 每行宽度都不同，
+        // 于是每行一张独立纹理、每行一次纹理换绑，实测把 200fps 压到 120fps。
+        // 现在：①阴影批次共用一张与宽度无关的九宫格模糊纹理；②行底与两条 1px 竖条合并进
+        // 矩形批次；③所有行的文字（阴影+主色两遍）合并进 CustomFont 的批量文字通道。
+        int rowCount = visibleList.size();
+        ensureRowBuffers(rowCount);
 
+        // 行背景不透明度（百分制 0~100，默认 50 = opal 原版 0x80090909 的 alpha 128/255）。
+        // 参数名带 % 后缀：老配置里的 "Background opacity"（0~255）不再被读取，
+        // 否则 137 这种旧值会被当 137% 换算后溢出到红通道。
+        int bgAlpha = Math.round(Math.max(0.0f, Math.min(100.0f, backgroundOpacity.getValue().floatValue()))
+                / 100.0f * 255.0f);
+        // 底色随明暗主题：Dark = opal 原色 0x090909；Light = 纯白（alpha 语义不变，仍由滑条控制）。
+        // 边缘晕开的 tint 是「阴影」——按需求不随明暗反转，恒用原来的近黑色。
+        int bgColor = (bgAlpha << 24) | ThemeHelper.surfaceRgb();
+        int shadowTint = (bgAlpha << 24) | 0x00090909;
+        boolean hasBar = !"None".equals(bar);
+        float textOffset = leftBar ? 2.0f : "None".equals(bar) ? 3.5f : 4.25f;
+
+        // ---- 第 1 遍：推进动画 + 算出本帧几何（缓存到复用数组，避免逐行分配）----
+        for (int i = 0; i < rowCount; i++) {
+            Entry entry = visibleList.get(i);
             entry.xAnim.animate(entry.posX, 0.4, Easings.EASE_OUT_EXPO);
             entry.yAnim.animate(entry.posY, 0.6, Easings.EASE_OUT_EXPO);
             entry.xAnim.tick();
@@ -211,12 +258,10 @@ public class ModuleList extends Module {
 
             // 虚拟坐标沿用 opal：value = posX 目标（静止=-width / 滑出=8），右缘渲染 x = value + scaledWidth
             float vx = entry.xAnim.getValueF();
-            float posY = entry.yAnim.getValueF();
-            int rowColor = ColorUtil.interpolateColorsBackAndForth(6, i * 20, colors[0], colors[1]);
-
-            float textOffset = leftBar ? 2.0f : "None".equals(bar) ? 3.5f : 4.25f;
             float w = entry.width;
-            float bgLeft, textX, barX;
+            float bgLeft;
+            float textX;
+            float barX;
             if (rightSide) {
                 // opal 原版右缘几何
                 float posXr = vx + scaledWidth;
@@ -229,29 +274,67 @@ public class ModuleList extends Module {
                 textX = textOffset - vx - w;                             // 文字左缘
                 barX = leftBar ? 3.5f - vx : 1.5f - vx - w;              // bar 镜像到行内侧/外侧
             }
+            rowBgLeft[i] = bgLeft;
+            rowY[i] = entry.yAnim.getValueF();
+            rowW[i] = w;
+            rowTextX[i] = textX;
+            rowBarX[i] = barX;
+            rowColor[i] = ColorUtil.interpolateColorsBackAndForth(6, i * 20, colors[0], colors[1]);
+        }
 
-            // 行背景（直角矩形，opal rect(posX-6.5F, posY, width+6.5F, OFFSET, 0x80090909)）；
-            // alpha 由 Background opacity 滑块(0-255)控制，默认 128 = opal 原版 0x80
-            // 边缘晕开：drawShadow tint 用与背景同色同 alpha，高斯纹理 alpha 中心→边缘天然衰减，
-            // 视觉上仅外圈柔和淡出（中心高 alpha 区被 background rect 覆盖主导，不会在面板上
-            // 形成「行进色图层覆盖」感）；blur=6。
-            // 注：cookie CustomFont drawStringRGB 是「顶锚定」(penY 即 glyph 顶)，与 NVG baseline
-            // 锚定不同——直接照搬 opal 的 posY+9 在这里会让 glyph 顶跑到 posY+8、行外越界。
-            int bgAlpha = Math.max(0, Math.min(255, backgroundOpacity.getValue().intValue()));
-            int bgColor = (bgAlpha << 24) | 0x00090909;
-            Renderer.drawShadow(guiGraphics.pose(), bgLeft, posY, w + 6.5f, OFFSET, 6.0f, bgColor);
-            Renderer.drawRect(guiGraphics.pose(), bgLeft, posY, w + 6.5f, OFFSET, bgColor);
-
-            if (!"None".equals(bar)) {
-                // 阴影（右缘 +0.5px 右下；左缘镜像为 -0.5px 左下）
-                float shadowX = rightSide ? barX + 0.5f : barX - 0.5f;
-                Renderer.drawRoundedRect(guiGraphics.pose(), shadowX, posY + 2.5f, 1.0f, 8.0f, 1.0f,
-                        ColorUtil.getShadowColor(rowColor));
-                Renderer.drawRoundedRect(guiGraphics.pose(), barX, posY + 2.0f, 1.0f, 8.0f, 1.0f, rowColor);
+        // ---- 第 2 遍：阴影（一次 draw）----
+        if (rowCount > 0) {
+            Renderer.beginShadowBatch(SHADOW_BLUR, OFFSET);
+            for (int i = 0; i < rowCount; i++) {
+                // 行背景直角矩形之外再晕开一圈（tint 与行底同色同 alpha，blur = SHADOW_BLUR）
+                Renderer.batchShadow(pose, rowBgLeft[i], rowY[i], rowW[i] + 6.5f, OFFSET, shadowTint);
             }
+            Renderer.endShadowBatch();
+        }
 
-            FontStore.PRODUCTSANS_MEDIUM_8.drawStringWithShadow(guiGraphics.pose(), entry.text,
-                    textX, posY + 2.5f, rowColor);
+        // ---- 第 3 遍：行底 + 两条 1px 竖条（一次 draw）----
+        if (rowCount > 0) {
+            Renderer.beginRectBatch();
+            for (int i = 0; i < rowCount; i++) {
+                // 行背景（直角矩形，opal rect(posX-6.5F, posY, width+6.5F, OFFSET, 0x80090909)）；
+                // alpha 由 Background opacity % 滑块(0-100)控制，默认 50 = opal 原版 0x80
+                Renderer.batchRect(pose, rowBgLeft[i], rowY[i], rowW[i] + 6.5f, OFFSET, bgColor);
+                if (hasBar) {
+                    // 竖条宽 1px：圆角半径 1 在 1px 宽上不可见，故并入矩形批次（省掉两行两次圆角 shader draw）。
+                    // 阴影条按右缘 +0.5px 右下 / 左缘 -0.5px 左下偏移。
+                    float shadowX = rightSide ? rowBarX[i] + 0.5f : rowBarX[i] - 0.5f;
+                    Renderer.batchRect(pose, shadowX, rowY[i] + 2.5f, 1.0f, 8.0f, ColorUtil.getShadowColor(rowColor[i]));
+                    Renderer.batchRect(pose, rowBarX[i], rowY[i] + 2.0f, 1.0f, 8.0f, rowColor[i]);
+                }
+            }
+            Renderer.endRectBatch();
+        }
+
+        // ---- 第 4 遍：文字（每行「阴影 + 主色」两遍，整批一次 draw）----
+        // 注：cookie CustomFont 是「顶锚定」(penY 即 glyph 顶)，与 NVG baseline 锚定不同——
+        // 直接照搬 opal 的 posY+9 会让 glyph 顶跑到 posY+8、行外越界。
+        if (rowCount > 0) {
+            CustomFont font = FontStore.PRODUCTSANS_MEDIUM_8;
+            // 先把所有行的字形预热（getOrLoadGlyph 带缓存，这里只是把还没加载的补齐）：
+            // 这样 appendText 期间不会再栅格化新字形 → 不会中途 flush/换页，整批就是一次 draw。
+            ResourceLocation textPage = null;
+            for (int i = 0; i < rowCount; i++) {
+                ResourceLocation page = font.glyphPageFor(visibleList.get(i).text);
+                if (textPage == null) {
+                    textPage = page;
+                }
+            }
+            if (textPage != null) {
+                Matrix4f matrix = new Matrix4f(pose.last().pose());
+                font.beginTextBatch(textPage);
+                int shadowArgb = CustomFont.shadowArgb();
+                for (int i = 0; i < rowCount; i++) {
+                    Entry entry = visibleList.get(i);
+                    font.appendText(matrix, entry.text, rowTextX[i] + 0.5f, rowY[i] + 3.0f, shadowArgb);
+                    font.appendText(matrix, entry.text, rowTextX[i], rowY[i] + 2.5f, rowColor[i]);
+                }
+                font.endTextBatch();
+            }
         }
 
         RenderHelper.popPose(pose);
@@ -273,9 +356,9 @@ public class ModuleList extends Module {
         }
     }
 
-    /** 布局编辑态边框：白色不透明度 80%（0xCCFFFFFF）的 1px 四边描边。 */
+    /** 布局编辑态边框：Dark 白 80% / Light 近黑 80%（1px 四边描边，必须与明暗底色有对比）。 */
     private static void drawEditFrame(PoseStack pose, float x, float y, float w, float h) {
-        int border = 0xCCFFFFFF;
+        int border = ThemeHelper.isLight() ? 0xCC101010 : 0xCCFFFFFF;
         Renderer.drawRect(pose, x, y, w, 1.0f, border);                  // 上边
         Renderer.drawRect(pose, x, y + h - 1.0f, w, 1.0f, border);       // 下边
         Renderer.drawRect(pose, x, y, 1.0f, h, border);                  // 左边

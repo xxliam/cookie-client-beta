@@ -4,11 +4,13 @@ import com.mojang.blaze3d.vertex.PoseStack;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.GuiGraphics;
 import net.minecraft.util.Mth;
-import xxliam.cookieclient.gui.dropdownclickgui.DropdownClickGui;
 import xxliam.cookieclient.gui.newclickgui.NewClickGui;
 import xxliam.cookieclient.render.Renderer;
 import xxliam.cookieclient.settings.impl.NumberSetting;
-import xxliam.cookieclient.utils.animation.SpringAnimation;
+import xxliam.cookieclient.utils.animation.SmoothAnimationTimer;
+import xxliam.cookieclient.utils.math.Easing;
+import xxliam.cookieclient.utils.math.Easings;
+import xxliam.cookieclient.utils.render.ThemeHelper;
 
 import java.util.Arrays;
 import java.util.List;
@@ -19,8 +21,9 @@ import java.util.List;
  * 照搬 OpenZen {@code shit.zen.hud.DynamicIsland}：
  * <ul>
  *   <li>元素优先级顺序：Scaffold → EventAlert → AutoPlay → Watermark（常驻）；</li>
- *   <li>弹簧：widthAnim(300,1.2,20,170) / heightAnim(300,1.2,20,18) /
- *       transitionAnim(250,1.0,22,1) 驱动尺寸过渡与 alpha 淡入淡出；</li>
+ *   <li>动画为<b>点对点曲线</b>：{@link SmoothAnimationTimer} + {@code 0.3s EASE_OUT_POW3}
+ *       （原 zen 的 width/height/transition 三个弹簧阻尼不足会过冲弹动，已按需求替换，
+ *       时长取 ≈ 原弹簧到达稳定的耗时 ⇒ 速度基本不变、无回弹）；</li>
  *   <li>元素统一按「几何中心锚点」定位（见 {@link #CENTER_ANCHOR_Y}），不再区分 TOP / CENTER；</li>
  *   <li>内容在方形 scissor 内裁剪绘制。</li>
  * </ul>
@@ -96,12 +99,24 @@ public class DynamicIsland {
             new WatermarkHud());
 
     private final ActiveElementSelector activeElementSelector = new ActiveElementSelector(this);
-    private final SpringAnimation widthAnim = new SpringAnimation(300.0f, 1.2f, 20.0f, 170.0f);
-    private final SpringAnimation heightAnim = new SpringAnimation(300.0f, 1.2f, 20.0f, 18.0f);
-    private final SpringAnimation transitionAnim = new SpringAnimation(250.0f, 1.0f, 22.0f, 1.0f);
+
+    /**
+     * 尺寸 / 转场动画：<b>点对点曲线</b>（{@link SmoothAnimationTimer}），不是弹簧。
+     * <p>
+     * 原 zen 三个弹簧（{@code width(300,1.2,20,170)} / {@code height(300,1.2,20,18)} /
+     * {@code transition(250,1,22,1)}）的阻尼都远低于临界值（ζ≈0.53 / 0.70），因此会<b>过冲</b>——
+     * 观感就是「弹一下」；`transition` 过冲时 {@code progress > 1} 还会让尺寸插值越过目标值。
+     * 现按需求改为无过冲的曲线动画，时长取 ≈ 旧弹簧到达稳定所需的时间，所以**总速度基本不变**、
+     * 只是去掉了尾部那几下回弹。
+     */
+    private static final double ANIM_DURATION = 0.3;
+    private static final Easing ANIM_EASING = Easings.EASE_OUT_POW3;
+
+    private final SmoothAnimationTimer widthAnim = new SmoothAnimationTimer();
+    private final SmoothAnimationTimer heightAnim = new SmoothAnimationTimer();
+    private final SmoothAnimationTimer transitionAnim = new SmoothAnimationTimer();
     private IHudElement activeElement = null;
     private IHudElement outgoingElement = null;
-    private long lastFrameTimestamp = 0L;
 
     /** 拖动偏移（Y，可持久化；由 Watermark 模块注入）。 */
     private final NumberSetting offsetYSetting;
@@ -128,46 +143,48 @@ public class DynamicIsland {
         if (mc == null || mc.player == null) {
             return;
         }
-        long now = System.currentTimeMillis();
-        if (lastFrameTimestamp == 0L) {
-            lastFrameTimestamp = now;
-        }
-        float deltaSec = (float) (now - lastFrameTimestamp) / 1000.0f;
-        lastFrameTimestamp = now;
-        deltaSec = Math.min(deltaSec, 0.033333335f);
 
         IHudElement visibleElement = activeElementSelector.visible();
         if (activeElement != visibleElement) {
             outgoingElement = activeElement;
             activeElement = visibleElement;
-            transitionAnim.reset(0.0f);
-            transitionAnim.setTargetValue(1.0f);
+            transitionAnim.reset(0.0);
             if (outgoingElement == null) {
+                // 首次出现：尺寸直接就位，不播转场
                 IHudElement.Size size = activeElement.size();
                 widthAnim.reset(size.width());
                 heightAnim.reset(size.height());
-                transitionAnim.reset(1.0f);
+                transitionAnim.reset(1.0);
             }
         }
 
         IHudElement.Size target = activeElement != null ? activeElement.size() : new IHudElement.Size(170.0f, 18.0f);
-        float targetWidth = target.width();
-        float targetHeight = target.height();
-        float progress = transitionAnim.getValue();
-        if (outgoingElement != null && progress < 1.0f) {
-            IHudElement.Size outgoingSize = outgoingElement.size();
-            targetWidth = Mth.lerp(progress, outgoingSize.width(), target.width());
-            targetHeight = Mth.lerp(progress, outgoingSize.height(), target.height());
-        }
-        widthAnim.setTargetValue(targetWidth);
-        heightAnim.setTargetValue(targetHeight);
-        widthAnim.update(deltaSec);
-        heightAnim.update(deltaSec);
-        transitionAnim.update(deltaSec);
+        transitionAnim.animate(1.0, ANIM_DURATION, ANIM_EASING);
+        transitionAnim.tick();
+        // 转场进度 0→1（曲线，无过冲）：既做尺寸插值因子，也做元素淡入系数
+        float progress = transitionAnim.getValueF();
 
-        // 元素自身已按 IslandMetrics.scale() 完成「字号 + 布局」的原生换算，这里只叠内边距
-        float contentWidth = Math.max(0.0f, widthAnim.getValue());
-        float contentHeight = Math.max(0.0f, heightAnim.getValue());
+        float contentWidth;
+        float contentHeight;
+        if (outgoingElement != null && progress < 1.0f) {
+            // 转场中：尺寸直接在「上一元素尺寸 → 新元素尺寸」之间按 progress 曲线插值（点对点）。
+            // 两个尺寸计时器同步到插值结果，转场结束后从当前位置接手，避免再接一次动画产生滞回。
+            IHudElement.Size outgoingSize = outgoingElement.size();
+            contentWidth = Mth.lerp(progress, outgoingSize.width(), target.width());
+            contentHeight = Mth.lerp(progress, outgoingSize.height(), target.height());
+            widthAnim.reset(contentWidth);
+            heightAnim.reset(contentHeight);
+        } else {
+            // 常态：元素自身尺寸变化（如服务器名 / 延迟文本变长）时走同一条曲线
+            widthAnim.animate(target.width(), ANIM_DURATION, ANIM_EASING);
+            heightAnim.animate(target.height(), ANIM_DURATION, ANIM_EASING);
+            widthAnim.tick();
+            heightAnim.tick();
+            contentWidth = widthAnim.getValueF();
+            contentHeight = heightAnim.getValueF();
+        }
+        contentWidth = Math.max(0.0f, contentWidth);
+        contentHeight = Math.max(0.0f, contentHeight);
         float islandHeight = Math.max(0.0f, contentHeight + PAD_Y);
         // 胶囊：半径 = 高度一半
         float cornerRadius = islandHeight * 0.5f;
@@ -191,10 +208,10 @@ public class DynamicIsland {
 
         boolean hasBackground = activeElement != null && activeElement.hasBackground();
         if (hasBackground) {
-            // 胶囊底：圆角 = 高度/2（左右两个半圆）；颜色为黑色，alpha 由 Watermark 的
-            // Background Opacity 滑条给出（10%~100% → 25~255，默认 16% ≈ zen 原 (0,0,0,40)）
+            // 胶囊底：圆角 = 高度/2（左右两个半圆）；RGB 随明暗主题（Dark = 黑、Light = 纯白），
+            // alpha 由 Watermark 的 Background Opacity 滑条给出（10%~100% → 25~255，默认 16% ≈ zen 原 (0,0,0,40)）
             int alpha = Math.round(Mth.clamp(backgroundOpacityPercent, 0.0f, 100.0f) / 100.0f * 255.0f);
-            int background = alpha << 24;
+            int background = (alpha << 24) | ThemeHelper.surfaceRgb();
             ZenHudDraw.drawRoundedRect(pose, islandX, islandY, islandWidth, islandHeight,
                     cornerRadius, background);
         }
@@ -241,10 +258,9 @@ public class DynamicIsland {
     // 布局编辑态（与 ModuleList 同款）
     // ---------------------------------------------------------------------
 
-    /** ClickGUI 处于「E 按钮」折叠态即进入布局编辑态（Zen=NewClickGui / Opal=DropdownClickGui）。 */
+    /** ClickGUI 处于「E 按钮」折叠态即进入布局编辑态。 */
     private static boolean isEditMode(Minecraft mc) {
-        return mc.screen instanceof NewClickGui gui && gui.isHidden()
-                || mc.screen instanceof DropdownClickGui drop && drop.isHidden();
+        return mc.screen instanceof NewClickGui gui && gui.isHidden();
     }
 
     /** 屏幕竖直中轴线：白色 30% 虚线（画整屏高）。 */
@@ -270,7 +286,7 @@ public class DynamicIsland {
     }
 
     // ---------------------------------------------------------------------
-    // ClickGUI 折叠态的岛屿拖动（由 NewClickGui / DropdownClickGui 路由）
+    // ClickGUI 折叠态的岛屿拖动（由 NewClickGui 路由）
     // ---------------------------------------------------------------------
 
     /** 当前上下拖动偏移。 */

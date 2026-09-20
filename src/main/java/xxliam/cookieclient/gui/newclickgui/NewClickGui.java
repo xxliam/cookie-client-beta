@@ -1,15 +1,16 @@
 package xxliam.cookieclient.gui.newclickgui;
 
 import com.mojang.blaze3d.vertex.PoseStack;
+import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.GuiGraphics;
 import net.minecraft.client.gui.screens.Screen;
 import net.minecraft.network.chat.Component;
 import net.minecraft.util.Mth;
+import org.lwjgl.glfw.GLFW;
 import xxliam.cookieclient.CookieClient;
-import xxliam.cookieclient.hud.DynamicIsland;
+import xxliam.cookieclient.gui.newclickgui.input.GuiInputRouter;
 import xxliam.cookieclient.modules.Category;
 import xxliam.cookieclient.modules.impl.render.ClickGui;
-import xxliam.cookieclient.modules.impl.render.hud.ModuleList;
 import xxliam.cookieclient.render.CustomFont;
 import xxliam.cookieclient.render.FontStore;
 import xxliam.cookieclient.render.Renderer;
@@ -24,7 +25,7 @@ import java.util.List;
 /**
  * ClickGUI：按分类横排的面板，含打开 / 关闭缩放动画。
  * <p>
- * 整体等比缩放系数由 ClickGui 模块的「Scale」滑条驱动（{@link #scale()}，百分制 / 100）：
+ * 整体等比缩放系数为固定值（{@link #scale()} = {@link ClickGui#ZEN_SCALE}，0.96）：
  * 水平以屏幕中心为轴、垂直以面板标题行 {@link #GUI_ANCHOR_Y} 为轴——标题行贴原位、
  * 模块区向下等比收拢。
  * <p>
@@ -37,6 +38,9 @@ import java.util.List;
  * 渲染与事件两级统一缩放：渲染走 Pose 矩阵，鼠标命中先经 {@link #toLocalX}/{@link #toLocalY}
  * 反算回未缩放空间；scissor 不受 Pose 影响，由面板用 {@link #toScaledX}/{@link #toScaledY}
  * 换算到缩放后屏幕坐标。
+ * <p>
+ * <b>渲染与交互分离</b>：本类只负责绘制与坐标换算（另加右下角按钮的几何），所有鼠标 / 键盘
+ * 事件一律委托给 {@link GuiInputRouter}（含面板 / 模块 / 设置项命中与全部拖动状态）。
  */
 public class NewClickGui extends Screen {
 
@@ -44,11 +48,18 @@ public class NewClickGui extends Screen {
     public static final float GUI_ANCHOR_Y = 36.0f;
 
     /**
-     * ClickGUI 整体等比缩放系数：由 ClickGui 模块的 {@code Scale} 滑条驱动
-     * （百分制 / 100，默认 0.95；zen 现有观感对应 0.80、opal 对应 1.00）。
+     * ClickGUI 整体等比缩放系数：固定 {@link ClickGui#ZEN_SCALE}（= 原 zen 常量 0.80 × 1.2 = 0.96）。
+     * <p>
+     * 原 opal 风格及与其配套的 {@code Scale} 滑条已于 2026-09-18 随 opal GUI 一并删除，故本值
+     * 现在是唯一的 GUI 尺度、不再有「两风格不同基准」的问题。
      */
     public static float scale() {
-        return ClickGui.getGuiScaleFactor();
+        return ClickGui.getZenScaleFactor();
+    }
+
+    /** GLFW 实时按键状态。 */
+    private static boolean isKeyDown(int key) {
+        return GLFW.glfwGetKey(Minecraft.getInstance().getWindow().getWindow(), key) == GLFW.GLFW_PRESS;
     }
 
     /** 右下角圆形按钮直径 / 阴影扩散 / 距屏缘留白（逻辑像素）。 */
@@ -60,6 +71,14 @@ public class NewClickGui extends Screen {
     private static final List<CategoryPanel> CATEGORY_PANELS = new ArrayList<>();
     public static CategoryPanel focusedPanel;
 
+    /**
+     * TAB 是否按住（按住时各模块行右侧显示其绑定键名，并暂时让出展开箭头的位置）。
+     * <p>
+     * TAB 悬浮键名功能自 opal 风格下拉 GUI（已删除）移植，驱动方式相同：每帧在
+     * {@link #render} 里按 GLFW 实时按键状态刷新。
+     */
+    public static boolean displayingBinds;
+
     private boolean closing;
     /** 折叠态：true=面板隐藏（非关闭，Screen 与按钮保留），false=面板展开。 */
     private boolean hidden;
@@ -69,17 +88,8 @@ public class NewClickGui extends Screen {
     /** 右下按钮显隐动画（1=显示，0=隐藏；BACK_OUT 0.32/0.22，与 clickgui 开关一致）。 */
     private final SmoothAnimationTimer btnAnim = new SmoothAnimationTimer();
 
-    // ---- ModuleList 布局编辑（仅 hidden 折叠态）：按住列表包围框拖动整列 ----
-    private boolean moduleDragActive;
-    private float moduleDragStartX;
-    private float moduleDragStartY;
-    private float moduleDragBaseOffsetX;
-    private float moduleDragBaseOffsetY;
-
-    // ---- 灵动岛布局编辑（仅 hidden 折叠态）：按住岛包围框沿屏幕中轴线上下拖动 ----
-    private boolean islandDragActive;
-    private float islandDragStartY;
-    private float islandDragBaseOffsetY;
+    /** 全部鼠标 / 键盘交互的唯一入口（命中路由 + 各类拖动状态）。 */
+    private final GuiInputRouter input = new GuiInputRouter(this);
 
     public NewClickGui() {
         super(Component.literal("Cookie Client ClickGUI"));
@@ -89,8 +99,12 @@ public class NewClickGui extends Screen {
     @Override
     protected void init() {
         focusedPanel = CATEGORY_PANELS.get(0);
-        // 7 个面板，每个宽 120、间距 8，总宽 888，起点居中 = width/2 - 444（未缩放逻辑布局）
-        float panelX = (float) this.width / 2.0f - 444.0f;
+        // 面板横排：每个宽 120、间距 8，整体水平居中（逻辑布局，未缩放）。
+        // 注意别再把总宽写死 —— 原先硬编码「7 个面板 = 888」并起点取 width/2 - 444，
+        // 一旦新增分类（如 Config）整排就会偏右。这里按实际面板数推导，7 个时结果与原来逐值相同。
+        int panelCount = CATEGORY_PANELS.size();
+        float totalWidth = panelCount * 120.0f + Math.max(0, panelCount - 1) * 8.0f;
+        float panelX = (float) this.width / 2.0f - totalWidth / 2.0f;
         for (CategoryPanel panel : CATEGORY_PANELS) {
             panel.setX(panelX);
             panel.setY(GUI_ANCHOR_Y);
@@ -100,6 +114,7 @@ public class NewClickGui extends Screen {
 
     @Override
     public void render(GuiGraphics guiGraphics, int mouseX, int mouseY, float delta) {
+        displayingBinds = isKeyDown(GLFW.GLFW_KEY_TAB);
         closeAnim.animate(closing ? 0.0 : 1.0, 0.2, Easings.EASE_OUT_POW2);
         closeAnim.tick();
         float closeProgress = closeAnim.getValueF();
@@ -110,7 +125,7 @@ public class NewClickGui extends Screen {
                 panel.reset();
             }
             ClickGui.onGuiClosed(); // 复位 ClickGui 模块（enabled 仅 GUI 打开期间为 true）
-            CookieClient.CONFIG_MANAGER.save(); // 持久化本次 GUI 会话中的开关/设置/绑定
+            CookieClient.CONFIG_MANAGER.save(); // 自动保存：GUI 关闭时持久化本次会话的开关/设置/绑定
             return;
         }
         hideAnim.animate(hidden ? 0.0 : 1.0, hidden ? 0.22 : 0.32, Easings.BACK_OUT);
@@ -139,129 +154,32 @@ public class NewClickGui extends Screen {
     @Override
     public void onClose() {
         closing = true;
-        BindElement.clearListening();
+        input.cancelAll();
     }
 
     @Override
     public boolean keyPressed(int keyCode, int scanCode, int modifiers) {
-        // 存在监听态的 Bind 按钮时，优先把按键交给它绑定
-        BindElement listening = BindElement.getListening();
-        if (listening != null) {
-            return listening.onKey(keyCode);
-        }
-        // GUI 内按 ClickGui 模块当前绑定的键 = 关闭（与游戏内打开对称；默认右 Shift）
-        int guiKey = ClickGui.INSTANCE != null ? ClickGui.INSTANCE.getKeyBind() : 344;
-        if (keyCode == guiKey) {
-            onClose();
-            return true;
-        }
-        return super.keyPressed(keyCode, scanCode, modifiers);
+        return input.keyPressed(keyCode) || super.keyPressed(keyCode, scanCode, modifiers);
     }
 
     @Override
     public boolean mouseClicked(double mouseX, double mouseY, int button) {
-        // 右下角圆形按钮：折叠 / 展开面板（任何按键都行，取左键即可）
-        if (isButtonHit(mouseX, mouseY)) {
-            if (button == 0) {
-                toggleHidden();
-            }
-            return true;
-        }
-        if (hidden) {
-            // 折叠态：左键点在各元素包围框上开始拖动；其余点击一律吞掉
-            if (button == 0 && (tryStartModuleDrag(mouseX, mouseY) || tryStartIslandDrag(mouseX, mouseY))) {
-                return true;
-            }
-            return true; // 面板已折叠：除按钮外不响应任何点击
-        }
-        // 存在监听态的 Bind 按钮时，侧键按下直接作为鼠标绑定捕获（与 keyPressed 路由按键对称）
-        BindElement listening = BindElement.getListening();
-        if (listening != null && listening.onMouse(button)) {
-            return true;
-        }
-        for (CategoryPanel panel : CATEGORY_PANELS) {
-            if (panel.mouseClicked(toLocalX(mouseX), toLocalY(mouseY), button)) {
-                focusedPanel = panel;
-                return true;
-            }
-        }
-        return super.mouseClicked(mouseX, mouseY, button);
+        return input.mouseClicked(mouseX, mouseY, button) || super.mouseClicked(mouseX, mouseY, button);
     }
 
     @Override
     public boolean mouseReleased(double mouseX, double mouseY, int button) {
-        if (moduleDragActive || islandDragActive) {
-            moduleDragActive = false;
-            islandDragActive = false;
-            return true;
-        }
-        if (hidden) {
-            return false;
-        }
-        for (CategoryPanel panel : CATEGORY_PANELS) {
-            panel.mouseReleased(toLocalX(mouseX), toLocalY(mouseY), button);
-        }
-        return false;
+        return input.mouseReleased(mouseX, mouseY, button) || super.mouseReleased(mouseX, mouseY, button);
     }
 
     @Override
     public boolean mouseDragged(double mouseX, double mouseY, int button, double dragX, double dragY) {
-        // ModuleList 布局拖动：跟随光标并把目标偏移钳制在屏幕内（边框不超出屏幕）。
-        // FREE_DRAG=true（自由双向）时沿用下方完整自由移动计算（备用，勿删）；
-        // 当前贴边垂直模式（false）仅锁定水平分量 = 拖动基准，列表只能沿屏幕边缘上下移动。
-        if (moduleDragActive && ModuleList.INSTANCE != null) {
-            float nx = moduleDragBaseOffsetX + (float) (mouseX - moduleDragStartX);
-            float ny = moduleDragBaseOffsetY + (float) (mouseY - moduleDragStartY);
-            if (!ModuleList.FREE_DRAG) {
-                nx = moduleDragBaseOffsetX;
-            }
-            ModuleList.INSTANCE.setDraggedOffset(nx, ny);
-            return true;
-        }
-        // 灵动岛布局拖动：只取 Y（水平恒居中于屏幕中轴线），钳制在屏幕内
-        if (islandDragActive && DynamicIsland.INSTANCE != null) {
-            float ny = islandDragBaseOffsetY + (float) (mouseY - islandDragStartY);
-            DynamicIsland.INSTANCE.setDraggedOffsetY(ny);
-            return true;
-        }
-        return super.mouseDragged(mouseX, mouseY, button, dragX, dragY);
-    }
-
-    /** 命中 ModuleList 包围框则进入拖动态（记录抓取基准）。 */
-    private boolean tryStartModuleDrag(double mouseX, double mouseY) {
-        if (ModuleList.INSTANCE == null || !ModuleList.INSTANCE.isFrameHit(mouseX, mouseY)) {
-            return false;
-        }
-        moduleDragActive = true;
-        moduleDragStartX = (float) mouseX;
-        moduleDragStartY = (float) mouseY;
-        moduleDragBaseOffsetX = ModuleList.INSTANCE.getOffsetX();
-        moduleDragBaseOffsetY = ModuleList.INSTANCE.getOffsetY();
-        return true;
-    }
-
-    /** 命中灵动岛包围框则进入拖动态（记录抓取基准；只走 Y = 沿屏幕中轴线上下）。 */
-    private boolean tryStartIslandDrag(double mouseX, double mouseY) {
-        if (DynamicIsland.INSTANCE == null || !DynamicIsland.INSTANCE.isFrameHit(mouseX, mouseY)) {
-            return false;
-        }
-        islandDragActive = true;
-        islandDragStartY = (float) mouseY;
-        islandDragBaseOffsetY = DynamicIsland.INSTANCE.getOffsetY();
-        return true;
+        return input.mouseDragged(mouseX, mouseY) || super.mouseDragged(mouseX, mouseY, button, dragX, dragY);
     }
 
     @Override
     public boolean mouseScrolled(double mouseX, double mouseY, double scrollDelta) {
-        if (hidden) {
-            return false;
-        }
-        for (CategoryPanel panel : CATEGORY_PANELS) {
-            if (panel.mouseScrolled(toLocalX(mouseX), toLocalY(mouseY), scrollDelta)) {
-                return true;
-            }
-        }
-        return false;
+        return input.mouseScrolled(mouseX, mouseY, scrollDelta);
     }
 
     @Override
@@ -278,12 +196,14 @@ public class NewClickGui extends Screen {
         return hidden;
     }
 
-    /** 点击右下按钮：翻转折叠态并中止可能存在的绑定监听 / ModuleList 拖动 / 灵动岛拖动。 */
-    private void toggleHidden() {
+    /** 点击右下按钮：翻转折叠态（拖动与绑定监听的中止由 {@link GuiInputRouter} 负责）。 */
+    public void toggleHidden() {
         hidden = !hidden;
-        moduleDragActive = false;
-        islandDragActive = false;
-        BindElement.clearListening();
+    }
+
+    /** 面板列表（渲染遍历 + 输入路由共用）。 */
+    public static List<CategoryPanel> getCategoryPanels() {
+        return CATEGORY_PANELS;
     }
 
     // ---------------------------------------------------------------------
@@ -299,7 +219,7 @@ public class NewClickGui extends Screen {
     }
 
     /** 命中检测：按钮圆内（略放宽容差）。用屏幕坐标判定，与按钮绘制一致不经过 GUI_SCALE。 */
-    private boolean isButtonHit(double mouseX, double mouseY) {
+    public boolean isToggleButtonHit(double mouseX, double mouseY) {
         float dx = (float) (mouseX - btnCenterX());
         float dy = (float) (mouseY - btnCenterY());
         float hit = BTN_RADIUS + 4.0f;
@@ -333,7 +253,7 @@ public class NewClickGui extends Screen {
                 BTN_RADIUS, 1.0f, ColorUtil.withAlpha(0xFF000000, alpha));
 
         // hover 微高亮（半透明白叠层，强化可点感）
-        if (isButtonHit(mouseX, mouseY)) {
+        if (isToggleButtonHit(mouseX, mouseY)) {
             Renderer.drawRoundedRect(pose, cx - half, cy - half, BTN_DIAMETER, BTN_DIAMETER,
                     BTN_RADIUS, 1.0f, ColorUtil.fromARGB(255, 255, 255, (int) (14.0f * alpha)));
         }

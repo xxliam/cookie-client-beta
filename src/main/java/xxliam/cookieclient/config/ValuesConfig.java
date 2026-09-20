@@ -2,22 +2,27 @@ package xxliam.cookieclient.config;
 
 import com.google.gson.Gson;
 import com.google.gson.GsonBuilder;
-import com.google.gson.reflect.TypeToken;
+import com.google.gson.JsonElement;
+import com.google.gson.JsonObject;
 import xxliam.cookieclient.CookieClient;
 import xxliam.cookieclient.modules.Module;
 import xxliam.cookieclient.settings.Setting;
 
 import java.io.IOException;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
-import java.util.ArrayList;
-import java.util.HashMap;
-import java.util.List;
+import java.nio.file.Path;
 import java.util.Map;
 
 /**
- * 设置值配置：保存每个模块所有 Setting 的取值（values.json）。
+ * 设置值配置：保存每个模块所有 {@link Setting} 的取值（values.json）。
  * <p>
- * 格式：{ "ModuleName": { "SettingName": value, ... }, ... }
+ * 格式：{@code { "ModuleName": { "SettingName": value, ... }, ... }}。
+ * 各 Setting 子类自带 {@code save/load} 序列化（含颜色 / 多选列表），
+ * 本类只负责按「模块 → 设置」两级路由。
+ * <p>
+ * 注意：隐藏设置（如 HUD 拖动偏移的 {@code NumberSetting(..., () -> false)}）
+ * 同样落盘——可见性只是 UI 概念，偏移量必须持久化。
  */
 public class ValuesConfig extends Config {
 
@@ -27,70 +32,70 @@ public class ValuesConfig extends Config {
         super("values.json");
     }
 
-    public void load(List<Module> modules) {
-        if (!Files.exists(getPath())) {
+    public void save() {
+        JsonObject root = new JsonObject();
+        for (Module module : CookieClient.MODULE_MANAGER.getModules()) {
+            if (module.getSettings().isEmpty()) {
+                continue;
+            }
+            JsonObject moduleJson = new JsonObject();
+            for (Setting<?> setting : module.getSettings()) {
+                setting.save(moduleJson);
+            }
+            root.add(module.getName(), moduleJson);
+        }
+        write(GSON.toJson(root));
+    }
+
+    public void load() {
+        String json = read();
+        if (json == null) {
             return;
         }
-        try {
-            Map<String, Map<String, Object>> data = GSON.fromJson(
-                    Files.readString(getPath()),
-                    new TypeToken<Map<String, Map<String, Object>>>() {
-                    }.getType());
-            if (data == null) {
-                return;
+        JsonObject root = GSON.fromJson(json, JsonObject.class);
+        if (root == null) {
+            return;
+        }
+        for (Module module : CookieClient.MODULE_MANAGER.getModules()) {
+            JsonObject moduleJson = root.getAsJsonObject(module.getName());
+            if (moduleJson == null) {
+                continue;
             }
-            for (Module module : modules) {
-                Map<String, Object> values = data.get(module.getName());
-                if (values == null) {
+            for (Setting<?> setting : module.getSettings()) {
+                JsonElement element = moduleJson.get(setting.getName());
+                if (element == null || element.isJsonNull()) {
                     continue;
                 }
-                for (Setting<?> setting : module.getSettings()) {
-                    Object raw = values.get(setting.getName());
-                    if (raw == null) {
-                        continue;
-                    }
-                    applyValue(setting, raw);
+                try {
+                    setting.load(element);
+                } catch (Exception e) {
+                    // 单个设置项的坏值不应拖垮整个配置加载（如改版后类型不匹配）
+                    CookieClient.LOGGER.warn("[Config] failed to load setting {}.{}",
+                            module.getName(), setting.getName(), e);
                 }
             }
-        } catch (IOException e) {
-            CookieClient.LOGGER.error("Failed to load values config", e);
         }
     }
 
-    public void save(List<Module> modules) {
-        Map<String, Map<String, Object>> data = new HashMap<>();
-        for (Module module : modules) {
-            Map<String, Object> values = new HashMap<>();
-            for (Setting<?> setting : module.getSettings()) {
-                values.put(setting.getName(), setting.getValue());
-            }
-            data.put(module.getName(), values);
+    private void write(String json) {
+        try {
+            Files.createDirectories(DIRECTORY);
+            Files.writeString(getPath(), json, StandardCharsets.UTF_8);
+        } catch (IOException e) {
+            CookieClient.LOGGER.warn("[Config] failed to write {}", getFileName(), e);
+        }
+    }
+
+    private String read() {
+        Path path = getPath();
+        if (!Files.exists(path)) {
+            return null;
         }
         try {
-            Files.createDirectories(getPath().getParent());
-            Files.writeString(getPath(), GSON.toJson(data));
+            return Files.readString(path, StandardCharsets.UTF_8);
         } catch (IOException e) {
-            CookieClient.LOGGER.error("Failed to save values config", e);
-        }
-    }
-
-    @SuppressWarnings({"unchecked", "rawtypes"})
-    private static void applyValue(Setting<?> setting, Object raw) {
-        Object value = setting.getValue();
-        if (value instanceof Number && raw instanceof Number) {
-            ((Setting) setting).setValue(((Number) raw).doubleValue());
-        } else if (value instanceof Boolean) {
-            ((Setting) setting).setValue(Boolean.valueOf(String.valueOf(raw)));
-        } else if (value instanceof String) {
-            ((Setting) setting).setValue(String.valueOf(raw));
-        } else if (value instanceof List) {
-            List<String> list = new ArrayList<>();
-            if (raw instanceof List<?> rawList) {
-                for (Object o : rawList) {
-                    list.add(String.valueOf(o));
-                }
-            }
-            ((Setting) setting).setValue(list);
+            CookieClient.LOGGER.warn("[Config] failed to read {}", getFileName(), e);
+            return null;
         }
     }
 }

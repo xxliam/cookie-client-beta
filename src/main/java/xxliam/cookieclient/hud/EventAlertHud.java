@@ -8,12 +8,13 @@ import net.minecraft.util.Mth;
 import net.minecraft.world.entity.Entity;
 import net.minecraft.world.entity.LightningBolt;
 import net.minecraft.world.entity.projectile.ThrownEnderpearl;
+import net.minecraft.world.level.ClipContext;
+import net.minecraft.world.phys.HitResult;
 import net.minecraft.world.phys.Vec3;
-import xxliam.cookieclient.modules.impl.render.Projectiles;
 import xxliam.cookieclient.render.CustomFont;
 import xxliam.cookieclient.render.FontStore;
+import xxliam.cookieclient.utils.render.ThemeHelper;
 
-import java.awt.Color;
 import java.util.Comparator;
 import java.util.Map;
 import java.util.Optional;
@@ -24,7 +25,10 @@ import java.util.concurrent.ConcurrentHashMap;
  * <p>
  * 照搬 OpenZen {@code shit.zen.hud.EventAlertHud}：
  * <ul>
- *   <li>珍珠预警读取 {@link Projectiles#projectileMap}（预测落点 + 剩余时间 + 距离）；</li>
+ *   <li>珍珠预警：对飞行中的敌方珍珠做落点预测（逐 tick 推进、drag 0.99、重力 0.03、
+ *       方块碰撞截止），取落点离自己最近的一颗。原先这段预测挂在 {@code Projectiles}
+ *       模块上并暴露 {@code projectileMap} 供本 HUD 读取；该模块已被 Naven 版弹道轨迹渲染
+ *       整体替换，预测遂内联到本类（算法与判定条件不变）；</li>
  *   <li>落雷在 5 秒窗口内记录、256 格内报警（EA0B 图标）。</li>
  * </ul>
  * 所有布局（padding 12、字号 materialicons 48/44 + poppins 8/6、图标基线偏移式、
@@ -89,27 +93,80 @@ public class EventAlertHud implements IHudElement {
     private Vec3 lastAlertPos = null;
     private long lastAlertTime = 0L;
 
+    /**
+     * 敌方末影珍珠预警：在场飞行中的敌方珍珠里，取预测落点离自己最近的一颗。
+     * <p>
+     * 预测逻辑原在 {@code Projectiles} 模块（OpenZen 系数据源）；该模块已被 Naven 版
+     * 弹道轨迹渲染替换，此处内联同样算法，筛选条件（存活 / 未落地 / 非自己投掷）不变。
+     */
     private Optional<AlertEntry> findProjectileAlert() {
         Minecraft mc = Minecraft.getInstance();
-        if (mc == null || mc.player == null || Projectiles.projectileMap.isEmpty()) {
+        if (mc == null || mc.player == null || mc.level == null) {
             return Optional.empty();
         }
-        return Projectiles.projectileMap.entrySet().stream().filter(entry -> {
-            if (mc.level == null) {
-                return false;
+        AlertEntry best = null;
+        double bestDistance = Double.MAX_VALUE;
+        for (Entity entity : mc.level.entitiesForRendering()) {
+            if (!(entity instanceof ThrownEnderpearl pearl) || !entity.isAlive() || entity.onGround()) {
+                continue;
             }
-            Entity entity = mc.level.getEntity(entry.getKey());
-            if (entity == null || !entity.isAlive() || entity.onGround()) {
-                return false;
+            Entity owner = pearl.getOwner();
+            if (owner == null || owner.equals(mc.player)) {
+                continue;
             }
-            if (!(entity instanceof ThrownEnderpearl)) {
-                return false;
+            PearlPrediction prediction = predictPearlLanding(pearl);
+            if (prediction == null) {
+                continue;
             }
-            Entity owner = ((ThrownEnderpearl) entity).getOwner();
-            return owner != null && !owner.equals(mc.player);
-        }).map(Map.Entry::getValue)
-                .min(Comparator.comparingDouble(p -> p.getVelocity().distanceToSqr(mc.player.position())))
-                .map(e -> new AlertEntry(e.getVelocity(), e.getZ(), Optional.of((float) e.getX()), "Find an ender pearl!", PEARL_ICON));
+            double landingDistance = prediction.landing().distanceToSqr(mc.player.position());
+            if (landingDistance < bestDistance) {
+                bestDistance = landingDistance;
+                best = new AlertEntry(prediction.landing(), prediction.distance(),
+                        Optional.of((float) prediction.flightTime()), "Find an ender pearl!", PEARL_ICON);
+            }
+        }
+        return Optional.ofNullable(best);
+    }
+
+    /** 珍珠落点预测结果：落点、剩余飞行时间（秒）、距自己距离（米）。 */
+    private record PearlPrediction(Vec3 landing, double flightTime, double distance) {
+    }
+
+    /**
+     * 敌方珍珠落点预测（原 {@code Projectiles.buildProjectileEntry}，算法逐字保留）：
+     * 每步 1/20 秒推进，drag 0.99、重力 0.03，命中方块即返回该步终点/时间/距离。
+     */
+    private PearlPrediction predictPearlLanding(ThrownEnderpearl pearl) {
+        Minecraft mc = Minecraft.getInstance();
+        if (mc.player == null || mc.level == null) {
+            return null;
+        }
+        double x = pearl.getX();
+        double y = pearl.getY();
+        double z = pearl.getZ();
+        double dx = pearl.getDeltaMovement().x;
+        double dy = pearl.getDeltaMovement().y;
+        double dz = pearl.getDeltaMovement().z;
+        for (int step = 0; step < 1000; step++) {
+            Vec3 start = new Vec3(x, y, z);
+            Vec3 end = new Vec3(x + dx, y + dy, z + dz);
+            HitResult hit = mc.level.clip(new ClipContext(start, end, ClipContext.Block.COLLIDER,
+                    ClipContext.Fluid.NONE, pearl));
+            if (hit != null && hit.getType() != HitResult.Type.MISS) {
+                Vec3 hitLoc = hit.getLocation();
+                return new PearlPrediction(hitLoc, step / 20.0, mc.player.getEyePosition().distanceTo(hitLoc));
+            }
+            x += dx;
+            y += dy;
+            z += dz;
+            if (y < mc.level.getMinBuildHeight() - 10) {
+                break;
+            }
+            dx *= 0.99;
+            dy = dy * 0.99 - 0.03;
+            dz *= 0.99;
+        }
+        return null;
     }
 
     private Optional<AlertEntry> findEntityAlert() {
@@ -188,7 +245,7 @@ public class EventAlertHud implements IHudElement {
             CustomFont timeFont = timeFont();
             CustomFont arrowFont = arrowFont();
 
-            int white = colorWithAlpha(Color.WHITE.getRGB(), alpha);
+            int white = ThemeHelper.foreground(alpha);
             float iconWidth = iconTitleFont.getStringWidth(alert.icon());
             // 图标 baseline（原式：centerY − (ascent+descent)/2 − descent，ascent 为 zen 负值）
             float iconBaseline = centerY - (ZenHudDraw.zenAscent(iconTitleFont) + ZenHudDraw.zenDescent(iconTitleFont)) / 2.0f
@@ -201,7 +258,7 @@ public class EventAlertHud implements IHudElement {
             ZenHudDraw.drawBaseline(guiGraphics.pose(), titleFont, alert.title(), textX, titleBaseline, white);
 
             String desc = alert.getFormattedDescription();
-            int grey = colorWithAlpha(new Color(170, 170, 170).getRGB(), alpha);
+            int grey = ThemeHelper.shade(0xAAAAAA, alpha);
             float descBaseline = centerY + ZenHudDraw.zenLineHeight(timeFont) / 2.0f + 6.0f * S;
             ZenHudDraw.drawBaseline(guiGraphics.pose(), timeFont, desc, textX, descBaseline, grey);
 
